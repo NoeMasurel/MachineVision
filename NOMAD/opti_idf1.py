@@ -73,6 +73,7 @@ TRACKER_NAME = "tracktrack"
 MAX_BB_EVAL = 1
 STAGNATION_REL_THRESHOLD = 0.0001
 STAGNATION_WINDOW = 5
+N_BEST = 5
 
 
 RESULTS_DIR = Path("Results")
@@ -147,7 +148,7 @@ def metrics_for_point(confidence: float, tracker_overrides: dict):
         raise RuntimeError(f"Expected exactly 1 prediction file, got {len(new_files)}: {new_files}")
     pred_file = new_files[0]
 
-    idf1, summary = IDF1_score_score(str(gt_path), OCCLUDED, str(pred_file), return_summary=True)  # type: ignore
+    _idf1, summary = IDF1_score_score(str(gt_path), OCCLUDED, str(pred_file), return_summary=True)  # type: ignore
     if "Identity.IDF1" not in summary:
         raise KeyError(f"No 'Identity.IDF1' key in summary. Available keys: {list(summary.keys())}")
 
@@ -162,6 +163,15 @@ def snap_to_granularity(value: float, lower: float, granularity: float) -> float
     steps = round((value - lower) / granularity)
     return round(lower + steps * granularity, 10)
 
+def _update_top_n(top_list: list, eval_record: dict, key: str, reverse: bool, n: int):
+    """
+    Insert `eval_record` into `top_list` (mutated in place), keep it sorted
+    by `eval_record[key]` (descending if reverse=True, ascending otherwise),
+    and truncate to the best `n` entries.
+    """
+    top_list.append(eval_record)
+    top_list.sort(key=lambda e: e[key], reverse=reverse)
+    del top_list[n:]
 # SHARED STATE (results bookkeeping + soft-stop handling)
 class OptimizationState:
     """
@@ -172,7 +182,8 @@ class OptimizationState:
 
     def __init__(self):
         self.all_evals = []
-        self.best_eval = None
+        self.best_evals_by_idf1 = []
+        self.best_evals_by_id_diff = []
         self.recent_idf1s = deque(maxlen=STAGNATION_WINDOW)
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
@@ -195,8 +206,9 @@ class OptimizationState:
         with self.lock:
             self.all_evals.append(eval_record)
 
-            if self.best_eval is None or eval_record["idf1"] > self.best_eval["idf1"]:
-                self.best_eval = eval_record
+            _update_top_n(self.best_evals_by_idf1, eval_record, "idf1", reverse=True, n=N_BEST)
+            _update_top_n(self.best_evals_by_id_diff, eval_record, "id_diff", reverse=False, n=N_BEST)
+
             self.recent_idf1s.append(eval_record["idf1"])
             stagnated = self._is_stagnated()
 
@@ -219,7 +231,8 @@ class OptimizationState:
             "status": "in_progress" if not self.stop_event.is_set() else f"stopping ({self.stop_reason})",
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "all_evals": self.all_evals,
-            "best_eval": self.best_eval,
+            "best_evals_by_idf1": self.best_evals_by_idf1,
+            "best_evals_by_id_diff": self.best_evals_by_id_diff,
         }
         tmp_path = PARTIAL_RESULTS_PATH.with_suffix(".tmp")
         with open(tmp_path, "w") as f:
@@ -242,8 +255,8 @@ class OptimizationState:
             "num_evals": len(self.all_evals),
             "num_successful": sum(1 for e in self.all_evals if e.get("success")),
             "raw_nomad_result": raw_result,
-            "all_evals": self.all_evals,
-            "best_eval": self.best_eval,
+            "best_evals_by_idf1": self.best_evals_by_idf1,
+            "best_evals_by_id_diff": self.best_evals_by_id_diff,
         }
         with open(RESULTS_PATH, "w") as f:
             json.dump(payload, f, indent=2)
@@ -322,17 +335,27 @@ def build_nomad_params(x0: list[float]) -> list[str]:
         "NB_THREADS_PARALLEL_EVAL 6",
     ]
 
+def _format_eval_line(eval_record: dict) -> str:
+    param_names = [d["name"] for d in SEARCH_SPACE]
+    values = "  ".join(f"{name}={eval_record[name]}" for name in param_names)
+    return (f"{values}  IDF1={eval_record['idf1']:.4f}  ID_diff={eval_record['id_diff']}  "
+            f"config={eval_record.get('tracker_config_yaml')}")
+
 
 def print_best(state: OptimizationState):
-    print("\nBest point found (by IDF1)")
-    if state.best_eval is None:
-        print("No successful evaluation found : every trial failed.")
-        return
-    param_names = [d["name"] for d in SEARCH_SPACE]
-    values = "  ".join(f"{name}={state.best_eval[name]}" for name in param_names)
-    print(f"{values}  IDF1={state.best_eval['idf1']:.4f}  ID_diff={state.best_eval['id_diff']}  "
-          f"config={state.best_eval.get('tracker_config_yaml')}")
+    print(f"\n--- Top {N_BEST} by IDF1 (highest first) ---")
+    if not state.best_evals_by_idf1:
+        print("No successful evaluation found -- every trial failed.")
+    else:
+        for i, ev in enumerate(state.best_evals_by_idf1, start=1):
+            print(f"{i}. {_format_eval_line(ev)}")
 
+    print(f"\n--- Top {N_BEST} by ID-count error (lowest first) ---")
+    if not state.best_evals_by_id_diff:
+        print("No successful evaluation found -- every trial failed.")
+    else:
+        for i, ev in enumerate(state.best_evals_by_id_diff, start=1):
+            print(f"{i}. {_format_eval_line(ev)}")
 
 def main():
     validate_config()
