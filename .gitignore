@@ -1,0 +1,23 @@
+# Data and outputs
+Data/
+data/
+models/
+Outdated/
+Results/
+videos/
+trackers/
+
+# Large files
+*.pdf
+*.mp4
+*.pt
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+CLI.py
+
+# Annotation / config files
+504_annotations/
+*.json
