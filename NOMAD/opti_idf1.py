@@ -306,7 +306,7 @@ def make_blackbox(state: OptimizationState):
                 f"Last {STAGNATION_WINDOW} consecutive successful evals all landed within "
                 f"{STAGNATION_REL_THRESHOLD * 100:.3f}% (relative) of each other "
                 f"(IDF1 range [{min(state.recent_idf1s):.4f}, {max(state.recent_idf1s):.4f}]) -- "
-                f"search has converged (best IDF1={state.best_eval['idf1']:.4f})." # type: ignore
+                f"search has converged (best IDF1={state.best_evals_by_idf1[0]:.4f})." # type: ignore
             )
 
         x.setBBO(f"{-idf1}".encode("UTF-8"))  # single output: minimize -idf1

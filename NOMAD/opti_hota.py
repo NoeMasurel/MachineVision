@@ -306,7 +306,7 @@ def make_blackbox(state: OptimizationState):
                 f"Last {STAGNATION_WINDOW} consecutive successful evals all landed within "
                 f"{STAGNATION_REL_THRESHOLD * 100:.3f}% (relative) of each other "
                 f"(HOTA range [{min(state.recent_hotas):.4f}, {max(state.recent_hotas):.4f}]) -- "
-                f"search has converged (best HOTA={state.best_eval['hota']:.4f})." # type: ignore
+                f"search has converged (best HOTA={state.best_evals_by_hota[0]:.4f})." # type: ignore
             )
 
         x.setBBO(f"{-hota}".encode("UTF-8"))  # single output: minimize -hota
