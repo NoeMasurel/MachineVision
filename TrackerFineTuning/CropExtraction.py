@@ -60,10 +60,13 @@ def extract_reid_crops(video_path, mot_annotation_path, output_dir, min_crops_pe
 
     print(f"Done. Extracted crops to {output_dir}/")
 
+def main():
+    extract_reid_crops(
+        video_path='GX011504.mp4',
+        mot_annotation_path='504_annotations/gt.txt',
+        output_dir='reid_dataset/raw',
+        frame_offset=164   # MOT frame 1 = video frame 165, so offset = 165 - 1 = 164
+    )
 
-extract_reid_crops(
-    video_path='GX011504.mp4',
-    mot_annotation_path='504_annotations/gt.txt',
-    output_dir='reid_dataset/raw',
-    frame_offset=164   # MOT frame 1 = video frame 165, so offset = 165 - 1 = 164
-)
+if __name__ == "__main__":
+    main()
