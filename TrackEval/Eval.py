@@ -301,6 +301,26 @@ def IDF1_score(gt_file, occluded, pred_file, max_iou=0.5, return_summary=False,
         return IDF1_score, summary
     return IDF1_score
 
+def AssA_score(gt_file, occluded, pred_file, max_iou=0.5, return_summary=False,
+              metrics=("HOTA", "CLEAR", "Identity")):
+    gt = load_gt(gt_file, occluded)
+    pred = load_predictions(pred_file)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        num_frames = write_trackeval_files(gt, pred, tmp_dir)
+        results = run_trackeval(tmp_dir, "seq01", "my_tracker", num_frames,
+                                 list(metrics), iou_threshold=max_iou)
+
+    summary = extract_summary(results, "my_tracker")
+    gt_id_count, pred_id_count = get_id_counts(gt, pred)
+    summary["gt_id_count"] = gt_id_count
+    summary["pred_id_count"] = pred_id_count
+    AssA = summary.get("HOTA.AssA")
+
+    if return_summary:
+        return AssA, summary
+    return AssA
+
 
 # CLI
 def parse_args():
