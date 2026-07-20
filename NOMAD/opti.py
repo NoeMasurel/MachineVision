@@ -62,7 +62,7 @@ from pathlib import Path
 import PyNomad
 
 import TrackEval.Compile as compile_mod
-from TrackEval.Eval import IDF1_score, hota_score
+from TrackEval.Eval import IDF1_score, hota_score, AssA_score
 from Ultralytics.tracker import list_valid_params, build_tracker_config
 
 # CONFIG
@@ -85,6 +85,7 @@ N_BEST = 5
 METRIC_CONFIG = {
     "idf1": {"score_fn": IDF1_score, "summary_key": "Identity.IDF1", "label": "IDF1"},
     "hota": {"score_fn": hota_score, "summary_key": "HOTA.HOTA", "label": "HOTA"},
+    "assa": {"score_fn": AssA_score, "summary_key": "HOTA.AssA", "label": "AssA"},
 }
 
 RESULTS_DIR = Path("Results")
