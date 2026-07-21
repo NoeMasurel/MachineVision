@@ -92,6 +92,10 @@ RESULTS_DIR = Path("Results")
 RESULTS_PATH = RESULTS_DIR / f"nomad_{TRACKER_NAME}_{datetime.now():%Y%m%d_%H%M%S}.json"
 PARTIAL_RESULTS_PATH = RESULTS_PATH.with_suffix(".partial.json")
 
+CSV_PATH = compile_mod.pred_from_gt(Path(GT_PATH)) / (
+    "metrics_results_occluded.csv" if OCCLUDED else "metrics_results.csv"
+)
+
 SEARCH_SPACE = [
     {"name": "confidence",        "target": "confidence", "lower": 0.1,  "upper": 0.9,  "granularity": 0.05},
     {"name": "track_high_thresh", "target": "tracker",    "lower": 0.1,  "upper": 0.9,  "granularity": 0.05},
@@ -169,7 +173,8 @@ def metrics_for_point(confidence: float, tracker_overrides: dict):
 
     id_diff = abs(summary["gt_id_count"] - summary["pred_id_count"])
     config_path = str(build_tracker_config(TRACKER_NAME, **tracker_overrides_full))
-    return summary[metric_cfg["summary_key"]], id_diff, config_path
+    csv_row = {"model": pred_file.name, **summary}
+    return summary[metric_cfg["summary_key"]], id_diff, config_path, csv_row
 
 def snap_to_granularity(value: float, lower: float, granularity: float) -> float:
     """Round `value` to the nearest point on the granularity grid anchored at `lower`."""
@@ -216,7 +221,7 @@ class OptimizationState:
             self.recent_scores.clear()
             self._save_partial()
 
-    def record_success(self, eval_record: dict) -> bool:
+    def record_success(self, eval_record: dict, csv_row: dict) -> bool:
         """Records a successful eval and returns True if it triggers the stagnation stop."""
         with self.lock:
             self.all_evals.append(eval_record)
@@ -228,6 +233,7 @@ class OptimizationState:
             stagnated = self._is_stagnated()
 
             self._save_partial()
+            compile_mod.save_csv([csv_row], CSV_PATH)
         return stagnated
 
     def _is_stagnated(self) -> bool:
@@ -303,7 +309,7 @@ def make_blackbox(state: OptimizationState):
         }
 
         try:
-            score, id_diff, config_path = metrics_for_point(confidence, tracker_overrides)
+            score, id_diff, config_path, csv_row = metrics_for_point(confidence, tracker_overrides)
         except Exception as e:
             print(f"[FAILED] {label} -> {e}")
             eval_record.update({"success": False, "error": str(e), "tracker_config_yaml": None})
@@ -318,7 +324,7 @@ def make_blackbox(state: OptimizationState):
             "tracker_config_yaml": config_path,
         })
 
-        stagnated = state.record_success(eval_record)
+        stagnated = state.record_success(eval_record, csv_row)
         if stagnated:
             best_so_far = state.best_evals_by_metric[0][METRIC] if state.best_evals_by_metric else float("nan")
             state.request_stop(
@@ -395,6 +401,7 @@ def main():
 
     print(f"Optimizing {METRIC_CONFIG[METRIC]['label']} over:", ", ".join(d["name"] for d in SEARCH_SPACE))
     print(f"Results will be saved to: {RESULTS_PATH.resolve()}")
+    print(f"CSV rows will be merged into: {CSV_PATH.resolve()}")
 
     start = time.monotonic()
     status = "completed"
