@@ -25,16 +25,21 @@ Evaluate existing prediction files in Prediction/<vid>/ (no tracking run):
 Run tracker(s) on a video, then evaluate only the files just produced:
     python Compile.py --gt MotMetrics/GroundTruth/vid1/gt.txt --video vid1.mp4
 
-Sweep multiple model sizes and confidence thresholds (cartesian product):
+Sweep model sizes, confidence thresholds, and trackers *in lockstep* (paired,
+NOT a cartesian product): the i-th run uses models[i], confidence[i] and
+trackers[i]. All three lists must be the same length:
     python Compile.py --gt ... --video vid1.mp4 \
-        --models n s m --confidence 0.25 0.4 0.6
+        --models n s m --confidence 0.25 0.4 0.6 \
+        --trackers bytetrack botsort none
 
-Sweep trackers too. Each --trackers token is one of:
+Each --trackers token is one of:
     none                                        no tracker override
     bytetrack                                   tracker name, default params
     '{"name":"botsort","with_reid":true}'        tracker name + param overrides
+    configs/my_tracker.yaml                      path to an existing tracker YAML file
         python Compile.py --gt ... --video vid1.mp4 \
-            --trackers none bytetrack "{\"name\":\"botsort\",\"with_reid\":true}"
+            --models n s --confidence 0.25 0.4 \
+            --trackers none "{\"name\":\"botsort\",\"with_reid\":true}"
     (On Windows cmd.exe, escape inner quotes as \" as shown above;
     PowerShell and bash accept single-quoted JSON as-is.)
 
@@ -48,11 +53,15 @@ ARGUMENTS
                 evaluating; if omitted, evaluates existing prediction files
                 in Prediction/<vid>/ instead.
 --occluded      Include GT detections marked occluded (visibility == 0).
---confidence    One or more detection confidence thresholds to sweep.
+--confidence    One or more detection confidence thresholds to sweep,
+                paired index-for-index with --models and --trackers.
 --models        One or more model sizes (e.g. n, s, m), mapped to
-                yolo26<size>.pt.
---trackers      One or more tracker specs: 'none', a tracker name, or a
-                JSON dict with 'name' plus parameter overrides. See USAGE.
+                yolo26<size>.pt. Paired index-for-index with --confidence
+                and --trackers.
+--trackers      One or more tracker specs: 'none', a tracker name, a JSON
+                dict with 'name' plus parameter overrides, or a path to a
+                .yaml/.yml tracker config file. Paired index-for-index with
+                --models and --confidence. See USAGE.
 """
 
 from TrackEval.Eval import hota_score, IDF1_score
@@ -60,7 +69,7 @@ from Ultralytics.saving_bboxes import ObjectTracking
 from Ultralytics.tracker import build_tracker_config
 import argparse
 import json
-import itertools
+
 from pathlib import Path
 import pandas as pd
 
@@ -90,12 +99,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--occluded", type=bool, default=False,
         help="Include the occluded detections from the ground truth")
     parser.add_argument("--confidence", nargs="+", type=float, default=[None],
-        help="One or more detection confidence thresholds to sweep over.")
+        help="One or more detection confidence thresholds, paired index-for-index "
+             "with --models and --trackers (NOT a cartesian product).")
     parser.add_argument("--models", nargs="+", default=["m"],
-        help="One or more model sizes, e.g. n s m l x (mapped to yolo26<x>.pt)")
+        help="One or more model sizes, e.g. n s m l x (mapped to yolo26<x>.pt). "
+             "Paired index-for-index with --confidence and --trackers.")
     parser.add_argument("--trackers", nargs="+", type=parse_tracker_spec, default=[None],
                      help="Tracker specs: a name (e.g. bytetrack), a JSON dict with overrides "
-                          "(e.g. '{\"name\":\"botsort\",\"with_reid\":true}'), or 'none' for no tracker.")
+                          "(e.g. '{\"name\":\"botsort\",\"with_reid\":true}'), a path to a "
+                          ".yaml/.yml tracker config file, or 'none' for no tracker. "
+                          "Paired index-for-index with --models and --confidence.")
     return parser.parse_args()
 
 # Tracker
@@ -145,11 +158,46 @@ def build_pred_filename(model_file: str, confidence, tracker_file) -> str:
         parts.append(Path(tracker_file).stem)
     return "_".join(parts) + ".txt"
 
+def align_sweep_lists(confidences: list, models: list, trackers: list) -> list[tuple]:
+    """
+    Pair up models / confidences / trackers index-for-index instead of
+    taking their cartesian product.
+
+    Rules:
+    - If a list has length 1 and another has length > 1, the length-1 list is
+      broadcast (repeated) to match, so you can still fix e.g. a single model
+      while sweeping confidence + tracker together.
+    - Otherwise all lists that have length > 1 must share the same length,
+      or this raises a ValueError.
+    """
+    lists = {"models": models, "confidence": confidences, "trackers": trackers}
+    lengths = {name: len(lst) for name, lst in lists.items()}
+    non_trivial = {name: n for name, n in lengths.items() if n > 1}
+
+    if non_trivial:
+        target_len = next(iter(non_trivial.values()))
+        mismatched = {name: n for name, n in non_trivial.items() if n != target_len}
+        if mismatched:
+            raise ValueError(
+                "When sweeping in lockstep, --models / --confidence / --trackers must "
+                f"either have length 1 or all share the same length. Got lengths: {lengths}"
+            )
+    else:
+        target_len = 1
+
+    def broadcast(lst):
+        return lst if len(lst) == target_len else lst * target_len
+
+    return list(zip(broadcast(models), broadcast(confidences), broadcast(trackers)))
+
 def run_trackers(video_path: str, gt_path: str, pred_path: str,
                 confidences: list, models: list, trackers: list) -> list[Path]:
     """
-    Run ObjectTracking for every combination (cartesian product) of
-    model x confidence x tracker, writing one MOT output file per combo.
+    Run ObjectTracking for each paired (model, confidence, tracker) triple —
+    i.e. the i-th run uses models[i], confidences[i], trackers[i] — writing
+    one MOT output file per combo. This is a lockstep zip, NOT a cartesian
+    product: --models, --confidence and --trackers must be the same length
+    (or length 1, in which case they're broadcast — see align_sweep_lists).
 
     `trackers` is a list of tracker *specs*, not raw file paths. Each spec is
     one of:
@@ -161,20 +209,21 @@ def run_trackers(video_path: str, gt_path: str, pred_path: str,
         "with_reid": True,
         "appearance_thresh": 0.85}   -> build that tracker's config with
                                         the given overrides.
+    - Path("configs/my.yaml")       -> an existing tracker YAML file, used
+                                        as-is (no build_tracker_config call).
 
     The actual YAML each spec resolves to is built via build_tracker_config()
-    and cached within this call, so the same spec used across multiple
-    model/confidence combos is only written to disk once.
+    and cached within this call, so an identical spec repeated across
+    multiple combos is only written to disk once.
 
     Returns the list of prediction files that were just created, so callers
     can evaluate only those instead of the whole prediction folder.
     """
-    # vid = Path(gt_path).parent.name
     model_files = cli_to_model(models)
     new_files: list[Path] = []
 
     # spec -> built config Path, so identical tracker specs aren't rebuilt
-    # on every model/confidence iteration.
+    # on every combo.
     built_tracker_cache: dict[str, Path | None] = {}
 
     def resolve_tracker(spec) -> Path | None:
@@ -182,7 +231,8 @@ def run_trackers(video_path: str, gt_path: str, pred_path: str,
             return None
 
         if isinstance(spec, Path):
-            # Explicit file path — use it directly, no build_tracker_config().
+            # Explicit file path (e.g. a .yaml/.yml tracker config) — use it
+            # directly, no build_tracker_config().
             return spec
 
         if isinstance(spec, str):
@@ -193,8 +243,8 @@ def run_trackers(video_path: str, gt_path: str, pred_path: str,
             overrides = spec
         else:
             raise TypeError(
-                f"Tracker spec must be None, a name string, or a dict with "
-                f"'name', got {type(spec).__name__}: {spec!r}"
+                f"Tracker spec must be None, a name string, a dict with 'name', "
+                f"or a Path to a YAML file, got {type(spec).__name__}: {spec!r}"
             )
 
         cache_key = json.dumps({"name": tracker_name, **overrides}, sort_keys=True, default=str)
@@ -202,7 +252,9 @@ def run_trackers(video_path: str, gt_path: str, pred_path: str,
             built_tracker_cache[cache_key] = build_tracker_config(tracker_name, **overrides)
         return built_tracker_cache[cache_key]
 
-    for model_file, confidence, tracker_spec in itertools.product(model_files, confidences, trackers):
+    combos = align_sweep_lists(confidences, model_files, trackers)
+
+    for model_file, confidence, tracker_spec in combos:
         tracker_path = resolve_tracker(tracker_spec)
 
         print(f"\n Running tracker | model={model_file}  confidence={confidence}  tracker={tracker_path}")
