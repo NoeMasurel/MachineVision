@@ -64,7 +64,7 @@ ARGUMENTS
                 --models and --confidence. See USAGE.
 """
 
-from TrackEval.Eval import hota_score, IDF1_score
+from TrackEval.Eval import hota_score, IDF1_score, AssA_score
 from Ultralytics.saving_bboxes import ObjectTracking 
 from Ultralytics.tracker import build_tracker_config
 import argparse
@@ -296,6 +296,17 @@ def evaluate_file_IDF1(gt_path: str, pred_file: Path, occluded: bool) -> dict:
     row.update(summary)
     return row
 
+def evaluate_file_AssA(gt_path: str, pred_file: Path, occluded: bool) -> dict:
+    """Evaluate a single prediction TXT file and return a metrics row."""
+    AssA, summary = AssA_score(gt_path, occluded, str(pred_file), return_summary=True) # type: ignore
+
+    print(f"\n AssA  = {AssA * 100:.2f} % — {pred_file.name}") # type: ignore
+    print(f"   IDs GT : {summary['gt_id_count']}  |  IDs Prediction : {summary['pred_id_count']}")
+
+    row = {"model": pred_file.name}
+    row.update(summary)
+    return row
+
 def evaluate_folder(gt_path: str, pred_folder: Path, occluded: bool) -> list[dict]:
     """Evaluate every TXT file found in pred_folder."""
     txt_files = sorted(pred_folder.glob("*.txt"))
@@ -311,7 +322,7 @@ def evaluate_files(gt_path: str, pred_files: list[Path], occluded: bool) -> list
         print("\n Aucun fichier de prédiction à évaluer.")
         return []
 
-    return [evaluate_file_IDF1(gt_path, pred_file, occluded) for pred_file in pred_files]
+    return [evaluate_file_hota(gt_path, pred_file, occluded) for pred_file in pred_files]
 
 # CSV export
 
