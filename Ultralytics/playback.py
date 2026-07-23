@@ -51,6 +51,10 @@ class Detection:
     bbox: list[float]
     conf: float
     cls: str = "person"
+    # Index of the detections file this came from (0 for the first file, etc.)
+    source: int = 0
+    # Display name of the detections file this came from (e.g. its filename)
+    source_name: str = ""
 
     @property
     def xyxy(self) -> tuple[int, int, int, int]:
@@ -58,10 +62,13 @@ class Detection:
         x, y, w, h = self.bbox
         return int(x), int(y), int(x + w), int(y + h)
 
-def load_detections(csv_path: Path) -> list[Detection]:
+def load_detections(csv_path: Path, source: int = 0, source_name: str = "") -> list[Detection]:
     """
     Read a MOT-style CSV: <frame>,<id>,<bb_left>,<bb_top>,<bb_width>,<bb_height>,<conf>,…
     Returns detections sorted by frame number.
+
+    `source` / `source_name` tag every detection with which input file it came
+    from, so multiple detection files can be told apart after merging.
     """
     detections: list[Detection] = []
     with open(csv_path, newline="") as fh:
@@ -75,6 +82,8 @@ def load_detections(csv_path: Path) -> list[Detection]:
                     bbox=[float(row[i]) for i in range(2, 6)],
                     conf=float(row[6]),
                     cls="person",
+                    source=source,
+                    source_name=source_name or csv_path.stem,
                 )
                 detections.append(det)
             except (IndexError, ValueError) as exc:
@@ -82,6 +91,16 @@ def load_detections(csv_path: Path) -> list[Detection]:
 
     detections.sort(key=lambda d: d.frame)
     return detections
+
+
+def load_all_detections(csv_paths: list[Path]) -> list[Detection]:
+    """Load and merge detections from one or more CSV files, tagging each
+    with its originating file index/name."""
+    all_detections: list[Detection] = []
+    for idx, path in enumerate(csv_paths):
+        all_detections.extend(load_detections(path, source=idx, source_name=path.stem))
+    all_detections.sort(key=lambda d: d.frame)
+    return all_detections
 
 def build_frame_index(detections: list[Detection]) -> dict[int, list[Detection]]:
     """Group detections by frame into a plain dict for safe .get() access."""
@@ -93,9 +112,13 @@ def build_frame_index(detections: list[Detection]) -> dict[int, list[Detection]]
 def _track_color(track_id: int) -> tuple[int, int, int]:
     return PALETTE[track_id % len(PALETTE)]
 
-def draw_bbox(frame: np.ndarray, det: Detection) -> None:
+def _source_color(source_idx: int) -> tuple[int, int, int]:
+    return PALETTE[source_idx % len(PALETTE)]
+
+def draw_bbox(frame: np.ndarray, det: Detection, color: tuple[int, int, int] | None = None) -> None:
     x1, y1, x2, y2 = det.xyxy
-    color = _track_color(det.id)
+    if color is None:
+        color = _track_color(det.id)
 
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
@@ -118,12 +141,19 @@ def draw_hud(
     total_frames: int,
     paused: bool,
     class_counts: dict[str, int],
+    source_legend: list[tuple[str, tuple[int, int, int]]] | None = None,
 ) -> None:
-    """Top-left semi-transparent overlay with counts and playback info."""
+    """Top-left semi-transparent overlay with counts and playback info.
+
+    `source_legend`, if given, is a list of (file_name, color) pairs drawn as
+    a small colored swatch + label — one line per detections file.
+    """
     lines = [f"Frame {frame_idx}/{total_frames}  {'[PAUSED]' if paused else ''}"]
     lines += [f"  {name}: {cnt}" for name, cnt in sorted(class_counts.items())]
 
-    height = HUD_PADDING + len(lines) * HUD_LINE_HEIGHT + HUD_PADDING
+    legend_lines = len(source_legend) if source_legend else 0
+    total_lines = len(lines) + legend_lines
+    height = HUD_PADDING + total_lines * HUD_LINE_HEIGHT + HUD_PADDING
     overlay = frame.copy()
     cv2.rectangle(
         overlay,
@@ -140,6 +170,22 @@ def draw_hud(
             LABEL_FONT, 0.65, (0, 255, 200), 1, cv2.LINE_AA,
         )
 
+    if source_legend:
+        swatch_size = 14
+        for j, (name, color) in enumerate(source_legend):
+            y = HUD_Y + HUD_PADDING + (len(lines) + j) * HUD_LINE_HEIGHT + HUD_LINE_HEIGHT // 2 + 6
+            sw_y1 = y - swatch_size + 4
+            cv2.rectangle(
+                frame,
+                (HUD_X + 8, sw_y1),
+                (HUD_X + 8 + swatch_size, sw_y1 + swatch_size),
+                color, -1,
+            )
+            cv2.putText(
+                frame, name, (HUD_X + 8 + swatch_size + 6, y),
+                LABEL_FONT, 0.55, (255, 255, 255), 1, cv2.LINE_AA,
+            )
+
 class VideoPlayer:
     """Encapsulates video playback, seeking, rendering, and key-event handling."""
 
@@ -150,6 +196,7 @@ class VideoPlayer:
         start_frame: int,
         end_frame: int,
         speed: float = 1.0,
+        source_names: list[str] | None = None,
     ):
         self.cap         = cap
         self.frame_index = frame_index
@@ -158,9 +205,19 @@ class VideoPlayer:
         self.fps         = cap.get(cv2.CAP_PROP_FPS) or 30.0
         self.speed       = speed
 
+        # When more than one detections file is loaded, color boxes by which
+        # file they came from and show a legend; otherwise fall back to the
+        # original per-track-ID coloring.
+        self.source_names = source_names or []
+        self.multi_source = len(self.source_names) > 1
+        self.legend = (
+            [(name, _source_color(i)) for i, name in enumerate(self.source_names)]
+            if self.multi_source else None
+        )
+
         self.paused        = False
         self.current_frame = start_frame
-        self.seen_ids: set[int]        = set()
+        self.seen_ids: set[tuple[int, int]] = set()
         self.class_counts: dict[str, int] = {}
 
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
@@ -169,10 +226,16 @@ class VideoPlayer:
         """Draw detections and HUD onto `frame` in-place."""
         current_detections = self.frame_index.get(self.current_frame, [])
         for det in current_detections:
-            draw_bbox(frame, det)
-            if det.id not in self.seen_ids:
-                self.seen_ids.add(det.id)
-                self.class_counts[det.cls] = self.class_counts.get(det.cls, 0) + 1
+            color = _source_color(det.source) if self.multi_source else None
+            draw_bbox(frame, det, color=color)
+
+            # Key seen-IDs by (source, id) so the same numeric ID from two
+            # different files is counted separately.
+            key = (det.source, det.id)
+            if key not in self.seen_ids:
+                self.seen_ids.add(key)
+                count_label = det.source_name if self.multi_source else det.cls
+                self.class_counts[count_label] = self.class_counts.get(count_label, 0) + 1
 
         draw_hud(
             frame,
@@ -180,6 +243,7 @@ class VideoPlayer:
             self.end_frame - self.start_frame,
             self.paused,
             self.class_counts,
+            source_legend=self.legend,
         )
 
     def _seek(self, target: int) -> np.ndarray | None:
@@ -239,8 +303,10 @@ def parse_args() -> argparse.Namespace:
         description="Replay video with saved MOT bounding boxes.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    ap.add_argument("-c", "--csv",   default="data/detections.txt",
-                    help="Path to detections CSV (MOT format)")
+    ap.add_argument("-c", "--csv",   nargs="+", default=["data/detections.txt"],
+                    help="Path(s) to detections CSV (MOT format). Pass more than "
+                         "one to overlay several detection sets, each drawn in "
+                         "its own color.")
     ap.add_argument("-v", "--video", required=True,
                     help="Source video path")
     ap.add_argument("-s", "--speed", type=float, default=1.0,
@@ -251,21 +317,27 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    csv_path = Path(args.csv)
-    if not csv_path.exists():
-        sys.exit(f"[ERROR] CSV not found: {csv_path}")
+    csv_paths = [Path(p) for p in args.csv]
+    for p in csv_paths:
+        if not p.exists():
+            sys.exit(f"[ERROR] CSV not found: {p}")
 
     vid_path = Path(args.video)
     if not vid_path.exists():
         sys.exit(f"[ERROR] Video not found: {vid_path}")
 
-    detections = load_detections(csv_path)
+    detections = load_all_detections(csv_paths)
     if not detections:
-        sys.exit("[ERROR] No valid detections found in CSV.")
+        sys.exit("[ERROR] No valid detections found in CSV file(s).")
+
+    if len(csv_paths) > 1:
+        print("Loaded detection sources:")
+        for i, p in enumerate(csv_paths):
+            print(f"  [{i}] {p.name}  ->  color {_source_color(i)}")
 
     frame_index = build_frame_index(detections)
-    start_frame = detections[0].frame
-    end_frame   = detections[-1].frame
+    start_frame = min(d.frame for d in detections)
+    end_frame   = max(d.frame for d in detections)
 
     cap = cv2.VideoCapture(str(vid_path))
     if not cap.isOpened():
@@ -277,6 +349,7 @@ def main() -> None:
         start_frame=start_frame,
         end_frame=end_frame,
         speed=args.speed,
+        source_names=[p.stem for p in csv_paths],
     )
     player.run()
 
