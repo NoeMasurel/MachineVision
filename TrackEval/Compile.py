@@ -91,7 +91,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--gt", required=True,
         help=("FolderName/Data/GroundTruth/<vid>/gt.txt\n"
-            "Prediction folder is automatically resolved to FolderName/Data/Prediction"),)
+            "Prediction folder can be  automatically resolved to FolderName/Data/Prediction"))
+    parser.add_argument("--pred", default=None, 
+        help="Overwrite pred path")
     parser.add_argument("--video", type=str, default=None,
         help=("Video path. When provided the tracker(s) run and write\n"
             "output(s) into the resolved prediction folder before evaluation.\n"
@@ -359,7 +361,10 @@ def print_summary(summary: dict, label: str) -> None:
 def main() -> None:
     args      = parse_args()
     gt_path   = Path(args.gt)
-    pred_path = pred_from_gt(gt_path)
+    if args.pred:
+        pred_path = Path(args.pred)
+    else:
+        pred_path = pred_from_gt(gt_path)
 
     csv_name = "metrics_results_occluded.csv" if args.occluded else "metrics_results.csv"
     csv_path = pred_path / csv_name
