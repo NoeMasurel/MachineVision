@@ -5,5 +5,5 @@ PyYAML
 ultralytics
 motmetrics
 trackeval
-PyNomad
+PyNomadBBO
 ffmpeg-python
