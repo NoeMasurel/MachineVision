@@ -2,9 +2,9 @@
 playback.py — Replay a video with bounding boxes from detections CSV.
 
 Usage
-    python playback.py -v path/to/video.mp4
-    python playback.py -v path/to/video.mp4 -c detections.txt
-    python playback.py -v path/to/video.mp4 -c detections.txt --speed 2.0
+    python -m stage_tracking.video.playback -v path/to/video.mp4
+    python -m stage_tracking.video.playback -v path/to/video.mp4 -c detections.txt
+    python -m stage_tracking.video.playback -v path/to/video.mp4 -c detections.txt --speed 2.0
 
 Controls
     q / ESC : quit
@@ -330,12 +330,12 @@ class VideoPlayer:
 
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="Replay video with saved MOT bounding boxes.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    ap.add_argument("-c", "--csv",   nargs="+", default=["data/detections.txt"],
+    ap.add_argument("-c", "--csv",   nargs="+", default=["runtime/detections/detections.txt"],
                     help="Path(s) to detections CSV (MOT format). Pass more than "
                          "one to overlay several detection sets, each drawn in "
                          "its own color.")
@@ -343,11 +343,11 @@ def parse_args() -> argparse.Namespace:
                     help="Source video path")
     ap.add_argument("-s", "--speed", type=float, default=1.0,
                     help="Playback speed multiplier")
-    return ap.parse_args()
+    return ap.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
 
     csv_paths = [Path(p) for p in args.csv]
     for p in csv_paths:

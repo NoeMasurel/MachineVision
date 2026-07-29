@@ -6,7 +6,7 @@ Outdated/
 Results/
 videos/
 trackers/
-tests/
+runtime/
 
 # Large files
 *.pdf
@@ -17,7 +17,7 @@ tests/
 __pycache__/
 *.py[cod]
 venv/
-CLI.py
+*.egg-info/
 
 # Annotation / config files
 504_annotations/

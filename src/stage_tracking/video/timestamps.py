@@ -33,7 +33,7 @@ KEY_N = 110
 KEY_B = 98
 KEY_S = 115
 KEY_E = 101
-KEY_BACKSPACE = 8 
+KEY_BACKSPACE = 8
 
 ANNOTATION_FORMAT_HELP = "one letter followed by one digit (e.g. A1, B3)"
 
@@ -103,14 +103,14 @@ def update_csv(
     if len(annotations) != len(clips):
         raise ValueError("annotations and clips must match")
 
-    rows = [] 
-    for annotation, clip in zip(annotations, clips): 
-        rows.append({ 
-            "video": filename, 
-            "segment": annotation, 
-            "start": clip.start, 
-            "end": clip.end, }) 
-        
+    rows = []
+    for annotation, clip in zip(annotations, clips):
+        rows.append({
+            "video": filename,
+            "segment": annotation,
+            "start": clip.start,
+            "end": clip.end, })
+
     new_df = pd.DataFrame(rows)
 
     if csv_path.exists():
@@ -334,7 +334,7 @@ def _handle_delete_key(state: PlaybackState) -> None :
             state.is_recording = True
         else :
             state.is_recording = False
-        
+
 def collect_missing_annotations(state: PlaybackState) -> None:
     """Prompt the user in the terminal for any clips that still lack annotations."""
     while len(state.annotations) < len(state.timestamps) // 2:
@@ -370,7 +370,7 @@ def finalize_timestamps(
 
     if format == "json" :
         update_json(output_path, state.annotations, state.timestamps, source_path)
-    else : 
+    else :
         update_csv(output_path, state.annotations, state.timestamps, source_path)
 
     print(f"Saved at {output_path} in {format}.")
@@ -445,24 +445,23 @@ def get_timestamps(source_path: Path, output_path: Path, format: str, speed: flo
 
     return finalize_timestamps(state, source_path, output_path, format)
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Interactive video timestamp marker.")
     ap.add_argument("-v", "--video", default=None, required=True, help="Source video path")
-    ap.add_argument("-o", "--output", default="data/timestamps.csv", help="Output file path")
+    ap.add_argument("-o", "--output", default="runtime/detections/timestamps.csv", help="Output file path")
     ap.add_argument("-f", "--format", default="csv", choices=["csv", "json"], help="Output format")
     ap.add_argument("-s", "--speed", default=1.5, type=float, help="Playback speed")
 
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     source_path = Path(args.video)
     ext = f".{args.format}"
     output_path = Path(args.output).with_suffix(ext)
     speed = args.speed
 
-    if speed <= 0 : 
+    if speed <= 0 :
         raise ValueError(f"Cannot have non positive speed")
 
     get_timestamps(source_path, output_path, args.format, speed)
 
 if __name__ == "__main__":
     main()
-    

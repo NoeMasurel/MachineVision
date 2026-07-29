@@ -6,26 +6,29 @@ Output is written in the MOT (Multiple Object Tracking) challenge format:
 
 Usage examples:
   # Basic run (with GUI window)
-  python object_tracking.py videos/clip.mp4
+  python -m stage_tracking.tracking.pipeline videos/clip.mp4
 
   # SSH / headless server (no display)
-  python object_tracking.py videos/clip.mp4 --no-display
+  python -m stage_tracking.tracking.pipeline videos/clip.mp4 --no-display
 
   # Trim to a time window, custom confidence, save output video
-  python object_tracking.py videos/clip.mp4 --start 10 --end 60 \
+  python -m stage_tracking.tracking.pipeline videos/clip.mp4 --start 10 --end 60 \
       --conf 0.4 --save-video output/annotated.mp4
 
   # Custom model and tracker, custom MOT output path
-  python object_tracking.py videos/clip.mp4 \
+  python -m stage_tracking.tracking.pipeline videos/clip.mp4 \
       --model yolo26n.pt --tracker deepocsort.yaml \
-      --output-mot data/my_results.txt
+      --output-mot runtime/detections/my_results.txt
 
   # Full option reference
-  python object_tracking.py --help
+  python -m stage_tracking.tracking.pipeline --help
 """
+
+from __future__ import annotations
 
 import argparse
 import csv
+import json
 from collections import defaultdict
 from pathlib import Path
 import cv2
@@ -33,6 +36,9 @@ import yaml
 from ultralytics import YOLO
 from ultralytics.utils.plotting import colors
 import pandas as pd
+
+from stage_tracking.config.models import TrackingConfig
+from stage_tracking.tracking.tracker_config import build_tracker_config
 
 
 def _load_tracker_params(tracker_path: str | None) -> dict:
@@ -248,9 +254,9 @@ class ObjectTracking:
             self.seen_ids.add(key)
             self.class_counts[self.names[cls]] += 1
 
-    # Main loop 
+    # Main loop
 
-    def run(self, output_mot: str = "data/detections.txt") -> list[tuple]:
+    def run(self, output_mot: str = "runtime/detections/detections.txt") -> list[tuple]:
         """
         Run tracking and return detections as a list of MOT rows.
 
@@ -313,7 +319,7 @@ class ObjectTracking:
                         print("Quit key pressed — stopping early.")
                         break
 
-                # Optional video save 
+                # Optional video save
                 if self._writer is not None:
                     self._writer.write(annotated_frame)
 
@@ -372,10 +378,10 @@ class ObjectTracking:
             print("\nFinal class counts:")
             for class_name, count in sorted(self.class_counts.items()):
                 print(f"  {class_name}: {count}")
-        else : 
+        else :
             print("\nNo detections made")
 
-        # Save MOT file 
+        # Save MOT file
         mot_rows.sort(key=lambda r: (r[0], r[1]))
 
         with open(output_mot, "w", newline="") as f:
@@ -386,8 +392,185 @@ class ObjectTracking:
         return mot_rows
 
 
+def run_tracking(config: TrackingConfig) -> Path:
+    """Run one tracking pass described by `config` and return the path of the
+    written MOT prediction file (config.output_path)."""
+    tracker = ObjectTracking(
+        source=str(config.video_path),
+        model=config.model,
+        start=config.start,
+        end=config.end,
+        duration=config.duration,
+        confidence=config.confidence,
+        tracker=str(config.tracker) if config.tracker is not None else None,
+        display=config.display,
+        save_video=str(config.save_video) if config.save_video is not None else None,
+        gt=str(config.gt_path) if config.gt_path is not None else None,
+    )
+    tracker.run(output_mot=str(config.output_path))
+    return config.output_path
+
+
+# Sweep helpers -- paired model/confidence/tracker combinations, as used by
+# the evaluation and optimization CLIs (NOT a cartesian product; see
+# align_sweep_lists).
+
+def cli_to_model(models: list) -> list:
+    return [f"models/yolo26{model}.pt" for model in models]
+
+
+def parse_tracker_spec(value: str):
+    """
+    argparse `type=` for --trackers tokens. Accepts:
+    - "none" / "None"                          -> None (no tracker override)
+    - "bytetrack"                              -> tracker name string
+    - '{"name":"botsort","with_reid":true}'    -> dict of name + overrides
+    - "configs/my_tracker.yaml"                -> Path to an existing tracker
+                                                   YAML file, used as-is
+    """
+    if value.lower() == "none":
+        return None
+
+    stripped = value.strip()
+    if stripped.startswith("{"):
+        try:
+            spec = json.loads(stripped)
+        except json.JSONDecodeError as e:
+            raise argparse.ArgumentTypeError(f"Invalid JSON tracker spec {value!r}: {e}")
+        if "name" not in spec:
+            raise argparse.ArgumentTypeError(f"Tracker spec dict must include 'name': {value!r}")
+        return spec
+
+    path_candidate = Path(stripped)
+    if path_candidate.suffix.lower() in (".yaml", ".yml") or path_candidate.is_file():
+        if not path_candidate.exists():
+            raise argparse.ArgumentTypeError(f"Tracker config file not found: {stripped!r}")
+        return path_candidate
+
+    return stripped
+
+
+def build_pred_filename(model_file: str, confidence, tracker_file) -> str:
+    """
+    Build a prediction filename that encodes every swept parameter, plus the
+    video id (taken from the GT folder name, same convention as pred_from_gt).
+    """
+    parts = [Path(model_file).stem]
+    if confidence is not None:
+        parts.append(f"conf{confidence}")
+    if tracker_file is not None:
+        parts.append(Path(tracker_file).stem)
+    return "_".join(parts) + ".txt"
+
+
+def align_sweep_lists(confidences: list, models: list, trackers: list) -> list[tuple]:
+    """
+    Pair up models / confidences / trackers index-for-index instead of
+    taking their cartesian product.
+
+    Rules:
+    - If a list has length 1 and another has length > 1, the length-1 list is
+      broadcast (repeated) to match, so you can still fix e.g. a single model
+      while sweeping confidence + tracker together.
+    - Otherwise all lists that have length > 1 must share the same length,
+      or this raises a ValueError.
+    """
+    lists = {"models": models, "confidence": confidences, "trackers": trackers}
+    lengths = {name: len(lst) for name, lst in lists.items()}
+    non_trivial = {name: n for name, n in lengths.items() if n > 1}
+
+    if non_trivial:
+        target_len = next(iter(non_trivial.values()))
+        mismatched = {name: n for name, n in non_trivial.items() if n != target_len}
+        if mismatched:
+            raise ValueError(
+                "When sweeping in lockstep, --models / --confidence / --trackers must "
+                f"either have length 1 or all share the same length. Got lengths: {lengths}"
+            )
+    else:
+        target_len = 1
+
+    def broadcast(lst):
+        return lst if len(lst) == target_len else lst * target_len
+
+    return list(zip(broadcast(models), broadcast(confidences), broadcast(trackers)))
+
+
+_tracker_spec_cache: dict[str, Path | None] = {}
+
+
+def _resolve_tracker_spec(spec) -> Path | None:
+    """
+    Resolve a tracker *spec* (None / name / override-dict / existing yaml Path)
+    into a concrete tracker YAML path via build_tracker_config(), caching by
+    spec so an identical spec repeated across multiple sweep combos is only
+    written to disk once.
+    """
+    if spec is None:
+        return None
+
+    if isinstance(spec, Path):
+        return spec
+
+    if isinstance(spec, str):
+        tracker_name, overrides = spec, {}
+    elif isinstance(spec, dict):
+        spec = dict(spec)  # don't mutate caller's dict
+        tracker_name = spec.pop("name")
+        overrides = spec
+    else:
+        raise TypeError(
+            f"Tracker spec must be None, a name string, a dict with 'name', "
+            f"or a Path to a YAML file, got {type(spec).__name__}: {spec!r}"
+        )
+
+    cache_key = json.dumps({"name": tracker_name, **overrides}, sort_keys=True, default=str)
+    if cache_key not in _tracker_spec_cache:
+        _tracker_spec_cache[cache_key] = build_tracker_config(tracker_name, **overrides)
+    return _tracker_spec_cache[cache_key]
+
+
+def run_tracking_sweep(video_path: str, gt_path: str, pred_path: str,
+                        confidences: list, models: list, trackers: list) -> list[Path]:
+    """
+    Run ObjectTracking for each paired (model, confidence, tracker) triple --
+    i.e. the i-th run uses models[i], confidences[i], trackers[i] -- writing
+    one MOT output file per combo. This is a lockstep zip, NOT a cartesian
+    product: --models, --confidence and --trackers must be the same length
+    (or length 1, in which case they're broadcast -- see align_sweep_lists).
+
+    `trackers` is a list of tracker *specs*, not raw file paths (see
+    _resolve_tracker_spec).
+
+    Returns the list of prediction files that were just created, so callers
+    can evaluate only those instead of the whole prediction folder.
+    """
+    model_files = cli_to_model(models)
+    new_files: list[Path] = []
+    combos = align_sweep_lists(confidences, model_files, trackers)
+
+    for model_file, confidence, tracker_spec in combos:
+        tracker_path = _resolve_tracker_spec(tracker_spec)
+
+        print(f"\n Running tracker | model={model_file}  confidence={confidence}  tracker={tracker_path}")
+
+        config = TrackingConfig(
+            video_path=Path(video_path),
+            model=model_file,
+            output_path=Path(pred_path) / build_pred_filename(model_file, confidence, tracker_path),
+            confidence=confidence,
+            tracker=tracker_path,
+            gt_path=Path(gt_path),
+            display=False,
+        )
+        output_path = run_tracking(config)
+        new_files.append(output_path)
+
+    return new_files
+
+
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="saving_bboxes.py",
+    p = argparse.ArgumentParser(prog="stage-track",
         description=(
             "YOLO object tracking with optional headless mode. "
             "MOT format saving "
@@ -411,8 +594,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p.add_argument("--gt", type=str, default=None, help="Filepath to csv ground truth in MOT format")
 
-    # Output 
-    p.add_argument("--output", default="data/detections.txt", help="Path for the MOT output file.",)
+    # Output
+    p.add_argument("--output", default="runtime/detections/detections.txt", help="Path for the MOT output file.",)
     p.add_argument("--save-video", default=None, help="Save annotated video to this path (e.g. output/annotated.mp4).")
 
     # Display
@@ -424,19 +607,20 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
 
-    tracker = ObjectTracking(
-        source     = args.source,
-        model      = args.model,
-        start      = args.start,
-        end        = args.end,
-        duration   = args.duration,
-        confidence = args.conf,
-        tracker    = args.tracker,
-        display    = not args.no_display,
-        save_video = args.save_video,
-        gt         = args.gt
+    config = TrackingConfig(
+        video_path=Path(args.source),
+        model=args.model,
+        output_path=Path(args.output),
+        confidence=args.conf,
+        tracker=args.tracker,
+        start=args.start,
+        end=args.end,
+        duration=args.duration,
+        gt_path=Path(args.gt) if args.gt else None,
+        display=not args.no_display,
+        save_video=Path(args.save_video) if args.save_video else None,
     )
-    tracker.run(output_mot=args.output)
+    run_tracking(config)
 
 
 if __name__ == "__main__":

@@ -11,15 +11,15 @@ official TrackEval library, from:
 
 Creates a temporary folder in the format expected by TrackEval.
 
-Filter occluded object 
+Filter occluded object
 
 Usage:
-    python compute_mot_score.py \
+    python -m stage_tracking.evaluation.metrics \
         --gt   data/gt/ground_truth.txt \
         --pred data/pred/predictions.txt
 
-    # Unfilter occluded GT objects 
-    python compute_mot_score.py \
+    # Unfilter occluded GT objects
+    python -m stage_tracking.evaluation.metrics \
         --gt   data/gt/ground_truth.txt \
         --pred data/pred/predictions.txt \
         --occluded False
@@ -27,13 +27,13 @@ Usage:
     # Change the IoU matching threshold used by CLEAR/Identity (default 0.5)
     # Note: HOTA does not take a single threshold (Sum over all possible thresholds)
     # official way it is computed.
-    python compute_mot_score.py \
+    python -m stage_tracking.evaluation.metrics \
         --gt   data/gt/ground_truth.txt \
         --pred data/pred/predictions.txt \
         --max-iou 0.5
 
     # Pick which metric families to compute
-    python compute_mot_score.py \
+    python -m stage_tracking.evaluation.metrics \
         --gt data/gt/ground_truth.txt \
         --pred data/pred/predictions.txt \
         --metrics HOTA CLEAR Identity
@@ -254,7 +254,7 @@ def hota_score(gt_file, occluded, pred_file, max_iou=0.5, return_summary=False,
     """
     Convenience wrapper for calling this from other code, analogous to the
     original motmetrics-based mot_score(). Returns Hota by default;
-    pass return_summary=True for the full dict of every computed metric, 
+    pass return_summary=True for the full dict of every computed metric,
     including HOTA/DetA/AssA/IDF1/etc.
     """
     gt = load_gt(gt_file, occluded)
@@ -280,7 +280,7 @@ def IDF1_score(gt_file, occluded, pred_file, max_iou=0.5, return_summary=False,
     """
     Convenience wrapper for calling this from other code, analogous to the
     original motmetrics-based mot_score(). Returns Hota by default;
-    pass return_summary=True for the full dict of every computed metric, 
+    pass return_summary=True for the full dict of every computed metric,
     including HOTA/DetA/AssA/IDF1/etc.
     """
     gt = load_gt(gt_file, occluded)
@@ -323,7 +323,7 @@ def AssA_score(gt_file, occluded, pred_file, max_iou=0.5, return_summary=False,
 
 
 # CLI
-def parse_args():
+def parse_args(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(
         description="Compute HOTA / CLEAR (MOTA,MOTP) / Identity (IDF1) metrics "
                     "via TrackEval, from a GT and prediction file."
@@ -342,10 +342,10 @@ def parse_args():
     parser.add_argument("--metrics", nargs="+", default=["HOTA", "CLEAR", "Identity"],
                         choices=["HOTA", "CLEAR", "Identity"],
                         help="Which metric families to compute (default: all three)")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
-def main():
-    args = parse_args()
+def main(argv: list[str] | None = None):
+    args = parse_args(argv)
 
     print(f"\nLoading ground truth : {args.gt}")
     gt = load_gt(args.gt, occluded=args.occluded)

@@ -95,13 +95,13 @@ def validate_file(path_str: str, label:str)-> Path:
 
     return path
 
-def main():
+def main(argv: list[str] | None = None):
     ap = argparse.ArgumentParser(description="Cut video into clips using timestamps")
 
     ap.add_argument("-v", "--video", required=True, help="Source video path")
     ap.add_argument("-ts", "--timestamps", required=True, help="Timestamps CSV file")
 
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     try:
         input_file = validate_file(args.video, "Video file")

@@ -1,6 +1,4 @@
 """
-build_tracker.py
-
 Builds a custom Ultralytics tracker YAML config from a tracker name plus
 keyword overrides, and returns the path to the written file. The path can
 be passed straight to `tracker=` in `ObjectTracking(...)` / `model.track(...)`.
@@ -10,19 +8,19 @@ sync with new trackers/params without hardcoding defaults. Bases are cached
 locally under CACHE_DIR after the first fetch.
 
 Usage:
-    from build_tracker import build_tracker_config
+    from stage_tracking.tracking.tracker_config import build_tracker_config
 
     path = build_tracker_config(
         "bytetrack",
         track_high_thresh=0.6,
         track_buffer=45,
     )
-    # -> Path("trackers/bytetrack_<hash>.yaml")
+    # -> Path("runtime/tracker_configs/bytetrack_<hash>.yaml")
 
     tracker = ObjectTracking(..., tracker=str(path))
 
 CLI:
-    python build_tracker.py botsort --with_reid True --appearance_thresh 0.85
+    python -m stage_tracking.tracking.tracker_config botsort --with_reid True --appearance_thresh 0.85
 """
 
 from __future__ import annotations
@@ -40,8 +38,10 @@ import yaml
 
 RAW_BASE_URL = "https://raw.githubusercontent.com/ultralytics/ultralytics/main/ultralytics/cfg/trackers/{name}.yaml"
 
-CACHE_DIR = Path(__file__).parent / ".tracker_base_cache"
-OUTPUT_DIR = Path(__file__).parent / "trackers"
+# Anchored to the current working directory (a runtime/cache location for the
+# calling project), not to this installed package's own file location.
+CACHE_DIR = Path.cwd() / "runtime" / "tracker_base_cache"
+OUTPUT_DIR = Path.cwd() / "runtime" / "tracker_configs"
 
 VALID_TRACKERS = {
     "botsort",
@@ -219,15 +219,15 @@ def _parse_value(raw: str):
     return raw
 
 
-def main():
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description="Build an Ultralytics tracker YAML config.",
-        epilog="Example: python build_tracker.py bytetrack --track_high_thresh 0.6 --track_buffer 45",
+        epilog="Example: python -m stage_tracking.tracking.tracker_config bytetrack --track_high_thresh 0.6 --track_buffer 45",
     )
     parser.add_argument("tracker", help="Tracker name, e.g. bytetrack, botsort, ocsort, deepocsort, fasttrack, tracktrack")
     parser.add_argument("--output", help="Explicit output file path")
     parser.add_argument("--allow-new-keys", action="store_true", help="Allow parameters not in the base config")
-    args, unknown = parser.parse_known_args()
+    args, unknown = parser.parse_known_args(argv)
 
     overrides = {}
     i = 0

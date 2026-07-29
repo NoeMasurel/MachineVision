@@ -1,9 +1,0 @@
-numpy
-pandas
-opencv-python
-PyYAML
-ultralytics
-motmetrics
-trackeval
-PyNomadBBO
-ffmpeg-python
