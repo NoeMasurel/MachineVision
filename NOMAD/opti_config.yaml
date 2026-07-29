@@ -1,0 +1,78 @@
+video_path: GX011504.mp4
+gt_path: Data/GroundTruth/Vid1/gt.txt
+models:
+  - m
+occluded: false
+tracker_name: tracktrack
+metric: idf1
+max_bb_eval: 1
+stagnation_rel_threshold: 0.0001
+stagnation_window: 5
+n_best: 5
+results_dir: Results
+tracker_override_defaults:
+  with_reid: true
+  gmc_method: sparseOptFlow
+search_space:
+  - name: confidence
+    target: confidence
+    lower: 0.1
+    upper: 0.9
+    granularity: 0.05
+  - name: track_high_thresh
+    target: tracker
+    lower: 0.1
+    upper: 0.9
+    granularity: 0.05
+  - name: track_low_thresh
+    target: tracker
+    lower: 0.05
+    upper: 0.5
+    granularity: 0.05
+  - name: new_track_thresh
+    target: tracker
+    lower: 0.1
+    upper: 0.9
+    granularity: 0.05
+  - name: match_thresh
+    target: tracker
+    lower: 0.5
+    upper: 0.95
+    granularity: 0.05
+  - name: track_buffer
+    target: tracker
+    lower: 10
+    upper: 100
+    granularity: 1
+    is_int: true
+  - name: lost_match_thr
+    target: tracker
+    lower: 0.0
+    upper: 0.5
+    granularity: 0.05
+  - name: iou_weight
+    target: tracker
+    lower: 0.2
+    upper: 0.8
+    granularity: 0.05
+  - name: reid_weight
+    target: tracker
+    lower: 0.2
+    upper: 0.8
+    granularity: 0.05
+  - name: conf_weight
+    target: tracker
+    lower: 0.05
+    upper: 0.8
+    granularity: 0.05
+x0_raw:
+  - 0.5
+  - 0.6
+  - 0.25
+  - 0.5
+  - 0.7
+  - 55.0
+  - 0.25
+  - 0.5
+  - 0.5
+  - 0.25
