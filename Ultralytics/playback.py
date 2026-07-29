@@ -33,7 +33,6 @@ PALETTE = [
 
 HUD_X           = 8
 HUD_Y           = 8
-HUD_WIDTH       = 230
 HUD_LINE_HEIGHT = 28
 HUD_PADDING     = 8
 HUD_ALPHA       = 0.55
@@ -135,6 +134,34 @@ def draw_bbox(frame: np.ndarray, det: Detection, color: tuple[int, int, int] | N
         LABEL_FONT, LABEL_FONT_SCALE, (0, 0, 0), LABEL_THICKNESS, cv2.LINE_AA,
     )
 
+def compute_hud_width(
+    total_frames: int,
+    class_names: list[str],
+    source_legend: list[tuple[str, tuple[int, int, int]]] | None,
+) -> int:
+    font_main = (LABEL_FONT, 0.65, 1)
+    font_small = (LABEL_FONT, 0.55, 1)
+
+    def text_width(text, font):
+        (w, _), _ = cv2.getTextSize(text, font[0], font[1], font[2])
+        return w
+
+    # Header (worst case with [PAUSED])
+    header = f"Frame {total_frames}/{total_frames}  [PAUSED]"
+    max_w = text_width(header, font_main)
+
+    # Class counts
+    for name in class_names:
+        line = f"{name}: 9999"
+        max_w = max(max_w, text_width(line, font_main))
+
+    # Legend names
+    if source_legend:
+        for name, _ in source_legend:
+            max_w = max(max_w, text_width(name, font_small) + 20)  # + swatch space
+
+    return max_w + 20  # padding
+
 def draw_hud(
     frame: np.ndarray,
     frame_idx: int,
@@ -143,6 +170,11 @@ def draw_hud(
     class_counts: dict[str, int],
     source_legend: list[tuple[str, tuple[int, int, int]]] | None = None,
 ) -> None:
+    HUD_WIDTH = compute_hud_width(
+        total_frames,
+        list(class_counts.keys()),
+        source_legend
+    )
     """Top-left semi-transparent overlay with counts and playback info.
 
     `source_legend`, if given, is a list of (file_name, color) pairs drawn as
