@@ -1,56 +1,13 @@
+# type: ignore
 """
-Optimizes a tracker's `confidence` threshold and tracker-specific parameters
-to maximize either IDF1 or HOTA (set via METRIC below), using NOMAD
-(PyNomad). ID-count error is recorded per eval but does not affect the
-search.
+Optimizes a tracker's confidence threshold and tracker-specific parameters
+using NOMAD (PyNomad).
 
-USAGE
------
-1. Edit the CONFIG section below (paths, tracker name, MAX_BB_EVAL, x0).
-   Set METRIC to "idf1" or "hota" to choose which score NOMAD optimizes.
-2. Edit SEARCH_SPACE to list the dimensions to optimize. Each entry is one
-   NOMAD dimension:
-
-       {"name": "confidence", "target": "confidence", "lower": 0.1,
-        "upper": 0.9, "granularity": 0.05}
-
-       {"name": "track_high_thresh", "target": "tracker", "lower": 0.1,
-        "upper": 0.9, "granularity": 0.05}
-
-       {"name": "track_buffer", "target": "tracker", "lower": 10,
-        "upper": 100, "granularity": 1, "is_int": True}
-
-   `target: "confidence"` feeds ObjectTracking's confidence arg directly.
-   `target: "tracker"` becomes an override passed to build_tracker_config()
-   for TRACKER_NAME. Use `is_int: True` for parameters that must stay whole
-   numbers. Run `list_valid_params(TRACKER_NAME)` to see valid names.
-3. Run the script. It stops when either:
-     - NOMAD's own mesh-size convergence is reached (MIN_MESH_SIZE /
-       MIN_POLL_SIZE are set to each dimension's GRANULARITY, so NOMAD stops
-       refining once it can't move by less than a grid step), or
-     - the application-level stagnation check trips: the last
-       STAGNATION_WINDOW *consecutive* successful evals all land within
-       STAGNATION_REL_THRESHOLD (relative) of each other.
-   Both stops are "soft": a flag is set and every subsequent blackbox call
-   returns an instant failure, so NOMAD burns through its remaining
-   MAX_BB_EVAL budget quickly and `main()` always reaches save_final_results().
-   Ctrl+C / SIGTERM trigger the same soft-stop path, so results are always
-   saved on exit.
-4. Results (every eval + the best point) are written to RESULTS_PATH as
-   JSON when the run finishes, and incrementally to a sibling
-   "*.partial.json" after every successful eval so a crash loses nothing.
-   Each eval record includes "tracker_config_yaml", the path to the YAML
-   config used for that trial (see resolve behavior in build_tracker_config).
-
-PARALLEL EVALUATIONS
----------------------
-Set NB_THREADS_PARALLEL_EVAL (in NOMAD_PARAMS below) to let NOMAD call the
-blackbox from multiple worker threads. All shared state lives in
-OptimizationState and is guarded by a single lock, so concurrent evals can't
-corrupt the results file or race on updating "best". Only the tracker run +
-scoring happens outside the lock.
+Runtime configuration is now loaded from a YAML file, and all file paths are
+resolved relative to the repository root instead of relying on hard-coded
+absolute paths.
 """
-
+import argparse
 import json
 import signal
 import threading
@@ -58,100 +15,205 @@ import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-
 import PyNomad
-
+import yaml
 import TrackEval.Compile as compile_mod
-from TrackEval.Eval import IDF1_score, hota_score, AssA_score
-from Ultralytics.tracker import list_valid_params, build_tracker_config
 
-# CONFIG
-VIDEO_PATH = "GX011504.MP4" #/home/noe/Research/Data/
-GT_PATH = "Data/GroundTruth/Vid1/gt.txt"
-MODELS = ["m"]
-OCCLUDED = False
-TRACKER_NAME = "tracktrack"
+from TrackEval.Eval import AssA_score, IDF1_score, hota_score
+from Ultralytics.tracker import build_tracker_config, list_valid_params
 
-# Which metric NOMAD should be maximized: "idf1" or "hota".
-METRIC = "idf1"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CONFIG_PATH = Path(__file__).with_name("opti_config.yaml")
 
-MAX_BB_EVAL = 1
-STAGNATION_REL_THRESHOLD = 0.0001
-STAGNATION_WINDOW = 5
-N_BEST = 5
-
-# Per-metric scoring function, the key to pull out of its summary dict, and
-# the label used in print statements / result files.
 METRIC_CONFIG = {
     "idf1": {"score_fn": IDF1_score, "summary_key": "Identity.IDF1", "label": "IDF1"},
     "hota": {"score_fn": hota_score, "summary_key": "HOTA.HOTA", "label": "HOTA"},
     "assa": {"score_fn": AssA_score, "summary_key": "HOTA.AssA", "label": "AssA"},
 }
 
-RESULTS_DIR = Path("Results")
-RESULTS_PATH = RESULTS_DIR / f"nomad_{TRACKER_NAME}_{datetime.now():%Y%m%d_%H%M%S}.json"
-PARTIAL_RESULTS_PATH = RESULTS_PATH.with_suffix(".partial.json")
+# Runtime globals -- all populated from the YAML config (optionally overridden
+# by argparse) in load_runtime_config(). No hard-coded defaults live here;
+# anything not supplied on the command line must be present in the config file.
+CONFIG_PATH = DEFAULT_CONFIG_PATH
+VIDEO_PATH = None
+GT_PATH = None
+MODELS = None
+OCCLUDED = False
+TRACKER_NAME = None
+METRIC = None
 
-CSV_PATH = compile_mod.pred_from_gt(Path(GT_PATH)) / (
-    "metrics_results_occluded.csv" if OCCLUDED else "metrics_results.csv"
-)
-
-SEARCH_SPACE = [
-    {"name": "confidence",        "target": "confidence", "lower": 0.1,  "upper": 0.9,  "granularity": 0.05},
-    {"name": "track_high_thresh", "target": "tracker",    "lower": 0.1,  "upper": 0.9,  "granularity": 0.05},
-    {"name": "track_low_thresh",  "target": "tracker",    "lower": 0.05, "upper": 0.5,  "granularity": 0.05},
-    {"name": "new_track_thresh",  "target": "tracker",    "lower": 0.1,  "upper": 0.9,  "granularity": 0.05},
-    {"name": "match_thresh",      "target": "tracker",    "lower": 0.5,  "upper": 0.95, "granularity": 0.05},
-    {"name": "track_buffer",      "target": "tracker",    "lower": 10,   "upper": 100,  "granularity": 1, "is_int": True},
-    {"name": "lost_match_thr",    "target": "tracker",    "lower": 0.0,  "upper": 0.5,  "granularity": 0.05},
-    {"name": "iou_weight",        "target": "tracker",    "lower": 0.2,  "upper": 0.8,  "granularity": 0.05},
-    {"name": "reid_weight",       "target": "tracker",    "lower": 0.2,  "upper": 0.8,  "granularity": 0.05},
-    {"name": "conf_weight",       "target": "tracker",    "lower": 0.05, "upper": 0.8,  "granularity": 0.05},
-]
+MAX_BB_EVAL = None
+STAGNATION_REL_THRESHOLD = None
+STAGNATION_WINDOW = None
+N_BEST = None
+RESULTS_DIR = None
+RESULTS_PATH = None
+PARTIAL_RESULTS_PATH = None
+CSV_PATH = None
+SEARCH_SPACE = None
+X0_RAW = None
+TRACKER_OVERRIDE_DEFAULTS = None
 
 
-X0_RAW = [0.5, 0.6, 0.25, 0.5, 0.7, 55.0, 0.25, 0.5, 0.5, 0.25]
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Optimize tracker parameters with NOMAD.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--config",
+        default=str(DEFAULT_CONFIG_PATH),
+        help="Path to the YAML config file",
+    )
+    parser.add_argument("--video", dest="video_path", help="Override video path from config")
+    parser.add_argument("--gt", dest="gt_path", help="Override GT path from config")
+    parser.add_argument("--metric", choices=sorted(METRIC_CONFIG), help="Override metric")
+    parser.add_argument("--results-dir", help="Override results directory")
+    parser.add_argument("--models", nargs="+", help="Override the model list")
+    parser.add_argument("--occluded", action="store_true", help="Include occluded GT rows")
+    parser.add_argument("--max-bb-eval", type=int, help="Override MAX_BB_EVAL")
+    parser.add_argument("--stagnation-window", type=int, help="Override STAGNATION_WINDOW")
+    parser.add_argument("--stagnation-rel-threshold", type=float, help="Override STAGNATION_REL_THRESHOLD")
+    parser.add_argument("--n-best", type=int, help="Override N_BEST")
+    parser.add_argument(
+        "--search-space",
+        type=json.loads,
+        help="Override search_space from config (JSON list of dimension dicts)",
+    )
+    parser.add_argument(
+        "--x0-raw",
+        type=json.loads,
+        help="Override x0_raw from config (JSON list of starting-point values)",
+    )
+    parser.add_argument(
+        "--tracker-override-defaults",
+        type=json.loads,
+        help="Override tracker_override_defaults from config (JSON object)",
+    )
+    return parser.parse_args()
 
-TRACKER_OVERRIDE_DEFAULTS = {"with_reid": True, "gmc_method": "sparseOptFlow"}
 
-# VALIDATION
+def resolve_path(path_value, base_dir: Path = REPO_ROOT) -> Path:
+    path = Path(str(path_value)).expanduser()
+    if not path.is_absolute():
+        path = (base_dir / path).resolve()
+    return path
+
+
+def _require(config: dict, key: str):
+    """Fetch a required key from the config file, raising a clear error if absent."""
+    if key not in config:
+        raise ValueError(
+            f"Missing required key '{key}' in config file: {CONFIG_PATH}. "
+            f"Either add it to the YAML or pass the equivalent --{key.replace('_', '-')} argument."
+        )
+    return config[key]
+
+
+def load_runtime_config(args):
+    global CONFIG_PATH, VIDEO_PATH, GT_PATH, MODELS, OCCLUDED, TRACKER_NAME, METRIC
+    global MAX_BB_EVAL, STAGNATION_REL_THRESHOLD, STAGNATION_WINDOW, N_BEST
+    global RESULTS_DIR, RESULTS_PATH, PARTIAL_RESULTS_PATH, CSV_PATH, SEARCH_SPACE, X0_RAW
+    global TRACKER_OVERRIDE_DEFAULTS
+
+    config_path = Path(args.config).expanduser()
+    if not config_path.is_absolute():
+        config_path = (REPO_ROOT / config_path).resolve()
+
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    with config_path.open("r", encoding="utf-8") as fh:
+        config = yaml.safe_load(fh) or {}
+
+    if not isinstance(config, dict):
+        raise ValueError(f"Config file must contain a YAML mapping: {config_path}")
+
+    CONFIG_PATH = config_path
+    VIDEO_PATH = resolve_path(args.video_path or _require(config, "video_path"))
+    GT_PATH = resolve_path(args.gt_path or _require(config, "gt_path"))
+
+    MODELS = args.models or _require(config, "models")
+    OCCLUDED = bool(args.occluded or config.get("occluded", False))
+
+    TRACKER_NAME = _require(config, "tracker_name")
+    METRIC = args.metric or _require(config, "metric")
+
+    MAX_BB_EVAL = args.max_bb_eval if args.max_bb_eval is not None else _require(config, "max_bb_eval")
+    STAGNATION_REL_THRESHOLD = (
+        args.stagnation_rel_threshold
+        if args.stagnation_rel_threshold is not None
+        else _require(config, "stagnation_rel_threshold")
+    )
+    STAGNATION_WINDOW = (
+        args.stagnation_window if args.stagnation_window is not None else _require(config, "stagnation_window")
+    )
+    N_BEST = args.n_best if args.n_best is not None else _require(config, "n_best")
+
+    RESULTS_DIR = resolve_path(args.results_dir or _require(config, "results_dir"))
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    RESULTS_PATH = RESULTS_DIR / f"nomad_{TRACKER_NAME}_{datetime.now():%Y%m%d_%H%M%S}.json"
+    PARTIAL_RESULTS_PATH = RESULTS_PATH.with_suffix(".partial.json")
+
+    SEARCH_SPACE = args.search_space if args.search_space is not None else _require(config, "search_space")
+    X0_RAW = args.x0_raw if args.x0_raw is not None else _require(config, "x0_raw")
+    TRACKER_OVERRIDE_DEFAULTS = (
+        args.tracker_override_defaults
+        if args.tracker_override_defaults is not None
+        else _require(config, "tracker_override_defaults")
+    )
+
+    if not VIDEO_PATH.exists():
+        raise FileNotFoundError(f"Video file not found: {VIDEO_PATH}")
+    if not GT_PATH.exists():
+        raise FileNotFoundError(f"Ground-truth file not found: {GT_PATH}")
+
+    CSV_PATH = compile_mod.pred_from_gt(GT_PATH) / (
+        "metrics_results_occluded.csv" if OCCLUDED else "metrics_results.csv"
+    )
+
+
 def validate_config():
     """Catch config mistakes before spending any NOMAD evals."""
     if len(MODELS) != 1:
-        raise ValueError("MODELS must contain exactly one model -- this optimizer "
-                          "evaluates one model's prediction at a time.")
+        raise ValueError(
+            "MODELS must contain exactly one model - this optimizer evaluates one model's prediction at a time."
+        )
     if len(X0_RAW) != len(SEARCH_SPACE):
-        raise ValueError(f"X0_RAW has {len(X0_RAW)} values but SEARCH_SPACE has "
-                          f"{len(SEARCH_SPACE)} dimensions.")
-    if not any(d["target"] == "confidence" for d in SEARCH_SPACE):
+        raise ValueError(
+            f"X0_RAW has {len(X0_RAW)} values but SEARCH_SPACE has {len(SEARCH_SPACE)} dimensions."
+        )
+    if not any(d.get("target") == "confidence" for d in SEARCH_SPACE):
         raise ValueError("SEARCH_SPACE must include one dimension with target='confidence'.")
     if METRIC not in METRIC_CONFIG:
         raise ValueError(f"METRIC must be one of {sorted(METRIC_CONFIG)}, got {METRIC!r}.")
 
     valid = set(list_valid_params(TRACKER_NAME))
     for dim in SEARCH_SPACE:
-        if dim["target"] == "tracker" and dim["name"] not in valid:
+        if dim.get("target") == "tracker" and dim.get("name") not in valid:
             raise ValueError(
-                f"'{dim['name']}' is not a valid parameter for tracker "
-                f"'{TRACKER_NAME}'. Valid parameters: {sorted(valid)}"
+                f"'{dim['name']}' is not a valid parameter for tracker '{TRACKER_NAME}'. "
+                f"Valid parameters: {sorted(valid)}"
             )
 
-# CORE EVAL LOGIC
+
 def point_to_args(x_coords: list[float]) -> tuple[float, dict]:
     """Split a NOMAD coordinate vector into (confidence, tracker_overrides)."""
     confidence = None
     overrides = {}
     for dim, coord in zip(SEARCH_SPACE, x_coords):
         value = int(round(coord)) if dim.get("is_int") else coord
-        if dim["target"] == "confidence":
+        if dim.get("target") == "confidence":
             confidence = value
         else:
             overrides[dim["name"]] = value
-    return confidence, overrides # type: ignore
+    return confidence, overrides  
+
 
 def metrics_for_point(confidence: float, tracker_overrides: dict):
     """Run the tracker at a given confidence + tracker-param combo and score it."""
-    gt_path = Path(GT_PATH)
+    gt_path = GT_PATH
     pred_path = compile_mod.pred_from_gt(gt_path)
     pred_path.mkdir(parents=True, exist_ok=True)
 
@@ -159,46 +221,50 @@ def metrics_for_point(confidence: float, tracker_overrides: dict):
     tracker_spec = {"name": TRACKER_NAME, **tracker_overrides_full}
 
     new_files = compile_mod.run_trackers(
-        VIDEO_PATH, str(gt_path), str(pred_path),
-        confidences=[confidence], models=MODELS, trackers=[tracker_spec],
+        str(VIDEO_PATH),
+        str(gt_path),
+        str(pred_path),
+        confidences=[confidence],
+        models=MODELS,
+        trackers=[tracker_spec],
     )
+
     if len(new_files) != 1:
         raise RuntimeError(f"Expected exactly 1 prediction file, got {len(new_files)}: {new_files}")
+
     pred_file = new_files[0]
 
     metric_cfg = METRIC_CONFIG[METRIC]
-    _score, summary = metric_cfg["score_fn"](str(gt_path), OCCLUDED, str(pred_file), return_summary=True)  # type: ignore
+    _score, summary = metric_cfg["score_fn"](str(gt_path), OCCLUDED, str(pred_file), return_summary=True)
+
     if metric_cfg["summary_key"] not in summary:
-        raise KeyError(f"No '{metric_cfg['summary_key']}' key in summary. Available keys: {list(summary.keys())}")
+        raise KeyError(
+            f"No '{metric_cfg['summary_key']}' key in summary. Available keys: {list(summary.keys())}"
+        )
 
     id_diff = abs(summary["gt_id_count"] - summary["pred_id_count"])
     config_path = str(build_tracker_config(TRACKER_NAME, **tracker_overrides_full))
     csv_row = {"model": pred_file.name, **summary}
     return summary[metric_cfg["summary_key"]], id_diff, config_path, csv_row
 
+
 def snap_to_granularity(value: float, lower: float, granularity: float) -> float:
-    """Round `value` to the nearest point on the granularity grid anchored at `lower`."""
+    """Round value to the nearest point on the granularity grid anchored at lower."""
     if not granularity:
         return value
     steps = round((value - lower) / granularity)
     return round(lower + steps * granularity, 10)
 
+
 def _update_top_n(top_list: list, eval_record: dict, key: str, reverse: bool, n: int):
-    """
-    Insert `eval_record` into `top_list` (mutated in place), keep it sorted
-    by `eval_record[key]` (descending if reverse=True, ascending otherwise),
-    and truncate to the best `n` entries.
-    """
+    """Insert eval_record into top_list, keep it sorted, and truncate to the best n entries."""
     top_list.append(eval_record)
     top_list.sort(key=lambda e: e[key], reverse=reverse)
     del top_list[n:]
-# SHARED STATE (results bookkeeping + soft-stop handling)
+
+
 class OptimizationState:
-    """
-    Holds everything that's mutated from inside NOMAD's blackbox callback.
-    Bundled into one object (instead of module-level globals) so the
-    locking/stagnation/save logic lives in one place and stays testable.
-    """
+    """Holds mutable optimizer state for results bookkeeping and soft-stop behavior."""
 
     def __init__(self):
         self.all_evals = []
@@ -257,7 +323,7 @@ class OptimizationState:
             "best_evals_by_id_diff": self.best_evals_by_id_diff,
         }
         tmp_path = PARTIAL_RESULTS_PATH.with_suffix(".tmp")
-        with open(tmp_path, "w") as f:
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
         tmp_path.replace(PARTIAL_RESULTS_PATH)
 
@@ -266,8 +332,8 @@ class OptimizationState:
         payload = {
             "tracker": TRACKER_NAME,
             "metric": METRIC,
-            "video_path": VIDEO_PATH,
-            "gt_path": GT_PATH,
+            "video_path": str(VIDEO_PATH),
+            "gt_path": str(GT_PATH),
             "models": MODELS,
             "occluded": OCCLUDED,
             "search_space": SEARCH_SPACE,
@@ -281,7 +347,7 @@ class OptimizationState:
             f"best_evals_by_{METRIC}": self.best_evals_by_metric,
             "best_evals_by_id_diff": self.best_evals_by_id_diff,
         }
-        with open(RESULTS_PATH, "w") as f:
+        with open(RESULTS_PATH, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
         print(f"\nResults saved to: {RESULTS_PATH.resolve()}")
 
@@ -290,7 +356,7 @@ class OptimizationState:
 
 
 def make_blackbox(state: OptimizationState):
-    """Builds the NOMAD blackbox callback, closing over `state`."""
+    """Builds the NOMAD blackbox callback, closing over state."""
     label_metric = METRIC_CONFIG[METRIC]["label"]
 
     def bb(x):
@@ -310,9 +376,9 @@ def make_blackbox(state: OptimizationState):
 
         try:
             score, id_diff, config_path, csv_row = metrics_for_point(confidence, tracker_overrides)
-        except Exception as e:
-            print(f"[FAILED] {label} -> {e}")
-            eval_record.update({"success": False, "error": str(e), "tracker_config_yaml": None})
+        except Exception as exc:
+            print(f"[FAILED] {label} -> {exc}")
+            eval_record.update({"success": False, "error": str(exc), "tracker_config_yaml": None})
             state.record_failure(eval_record)
             return 0
 
@@ -339,7 +405,7 @@ def make_blackbox(state: OptimizationState):
 
     return bb
 
-# MAIN
+
 def build_nomad_params(x0: list[float]) -> list[str]:
     lower_bounds = " ".join(str(d["lower"]) for d in SEARCH_SPACE)
     upper_bounds = " ".join(str(d["upper"]) for d in SEARCH_SPACE)
@@ -360,12 +426,16 @@ def build_nomad_params(x0: list[float]) -> list[str]:
         "NB_THREADS_PARALLEL_EVAL 6",
     ]
 
+
 def _format_eval_line(eval_record: dict) -> str:
     label_metric = METRIC_CONFIG[METRIC]["label"]
     param_names = [d["name"] for d in SEARCH_SPACE]
     values = "  ".join(f"{name}={eval_record[name]}" for name in param_names)
-    return (f"{values}  {label_metric}={eval_record[METRIC]:.4f}  ID_diff={eval_record['id_diff']}  "
-            f"config={eval_record.get('tracker_config_yaml')}")
+    return (
+        f"{values}  {label_metric}={eval_record[METRIC]:.4f}  "
+        f"ID_diff={eval_record['id_diff']}  "
+        f"config={eval_record.get('tracker_config_yaml')}"
+    )
 
 
 def print_best(state: OptimizationState):
@@ -385,8 +455,12 @@ def print_best(state: OptimizationState):
         for i, ev in enumerate(state.best_evals_by_id_diff, start=1):
             print(f"{i}. {_format_eval_line(ev)}")
 
+
 def main():
+    args = parse_args()
+    load_runtime_config(args)
     validate_config()
+
     state = OptimizationState()
     bb = make_blackbox(state)
 
@@ -399,6 +473,7 @@ def main():
     x0 = [snap_to_granularity(v, d["lower"], d["granularity"]) for v, d in zip(X0_RAW, SEARCH_SPACE)]
     params = build_nomad_params(x0)
 
+    print(f"Using config: {CONFIG_PATH}")
     print(f"Optimizing {METRIC_CONFIG[METRIC]['label']} over:", ", ".join(d["name"] for d in SEARCH_SPACE))
     print(f"Results will be saved to: {RESULTS_PATH.resolve()}")
     print(f"CSV rows will be merged into: {CSV_PATH.resolve()}")
