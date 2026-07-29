@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from stage_tracking.tracking import pipeline as pipeline_mod
+from tracking.tracking import pipeline as pipeline_mod
 
 
 def test_parse_tracker_spec_handles_none_and_path():

@@ -8,7 +8,7 @@ sync with new trackers/params without hardcoding defaults. Bases are cached
 locally under CACHE_DIR after the first fetch.
 
 Usage:
-    from stage_tracking.tracking.tracker_config import build_tracker_config
+    from tracking.tracking.tracker_config import build_tracker_config
 
     path = build_tracker_config(
         "bytetrack",
@@ -20,7 +20,7 @@ Usage:
     tracker = ObjectTracking(..., tracker=str(path))
 
 CLI:
-    python -m stage_tracking.tracking.tracker_config botsort --with_reid True --appearance_thresh 0.85
+    python -m tracking.tracking.tracker_config botsort --with_reid True --appearance_thresh 0.85
 """
 
 from __future__ import annotations
@@ -222,7 +222,7 @@ def _parse_value(raw: str):
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description="Build an Ultralytics tracker YAML config.",
-        epilog="Example: python -m stage_tracking.tracking.tracker_config bytetrack --track_high_thresh 0.6 --track_buffer 45",
+        epilog="Example: python -m tracking.tracking.tracker_config bytetrack --track_high_thresh 0.6 --track_buffer 45",
     )
     parser.add_argument("tracker", help="Tracker name, e.g. bytetrack, botsort, ocsort, deepocsort, fasttrack, tracktrack")
     parser.add_argument("--output", help="Explicit output file path")

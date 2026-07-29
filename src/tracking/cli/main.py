@@ -5,9 +5,9 @@ argparse-based `main()`, which parses arguments, builds a config object, and
 calls the public API (run_tracking / evaluate_predictions / optimize_parameters).
 """
 
-from stage_tracking.evaluation import compile as evaluation_compile
-from stage_tracking.optimization import nomad_runner
-from stage_tracking.tracking import pipeline
+from tracking.evaluation import compile as evaluation_compile
+from tracking.optimization import nomad_runner
+from tracking.tracking import pipeline
 
 
 def track(argv: list[str] | None = None) -> None:

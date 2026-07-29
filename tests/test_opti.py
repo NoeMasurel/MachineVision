@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from stage_tracking.config.loading import load_optimization_config
-from stage_tracking.config.models import OptimizationConfig
-from stage_tracking.optimization import nomad_runner as opti
+from tracking.config.loading import load_optimization_config
+from tracking.config.models import OptimizationConfig
+from tracking.optimization import nomad_runner as opti
 
 
 def _write_config(tmp_path: Path) -> Path:

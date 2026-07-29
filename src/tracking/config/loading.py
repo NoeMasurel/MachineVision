@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from stage_tracking.config.models import OptimizationConfig
+from tracking.config.models import OptimizationConfig
 
 
 def load_yaml(path: str | Path) -> dict[str, Any]:

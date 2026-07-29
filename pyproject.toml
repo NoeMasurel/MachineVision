@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "stage-tracking"
+name = "tracking"
 version = "0.1.0"
 description = "Tracking, evaluation, and optimization toolkit for MOT pipelines built on Ultralytics + TrackEval + NOMAD"
 readme = "README.md"
@@ -21,12 +21,12 @@ dependencies = [
 ]
 
 [project.scripts]
-stage-track = "stage_tracking.cli.main:track"
-stage-evaluate = "stage_tracking.cli.main:evaluate"
-stage-optimize = "stage_tracking.cli.main:optimize"
+track = "tracking.cli.main:track"
+evaluate = "tracking.cli.main:evaluate"
+optimize = "tracking.cli.main:optimize"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/stage_tracking"]
+packages = ["src/tracking"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

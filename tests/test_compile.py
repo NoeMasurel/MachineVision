@@ -1,6 +1,6 @@
 import pandas as pd
 
-from stage_tracking.evaluation import compile as compile_mod
+from tracking.evaluation import compile as compile_mod
 
 
 def test_pred_from_gt_resolves_prediction_folder(tmp_path):

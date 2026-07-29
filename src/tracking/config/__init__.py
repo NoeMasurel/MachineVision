@@ -1,5 +1,5 @@
-from stage_tracking.config.loading import load_optimization_config, load_yaml
-from stage_tracking.config.models import (
+from tracking.config.loading import load_optimization_config, load_yaml
+from tracking.config.models import (
     DatasetConfig,
     EvaluationConfig,
     OptimizationConfig,

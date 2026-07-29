@@ -1,6 +1,6 @@
 import yaml
 
-from stage_tracking.tracking import tracker_config as tracker
+from tracking.tracking import tracker_config as tracker
 
 
 def test_build_tracker_config_writes_override_yaml(tmp_path):

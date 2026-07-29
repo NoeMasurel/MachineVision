@@ -2,7 +2,7 @@
 Compile.py
 ----------
 Sweeps object-tracking runs across combinations of model, detection
-confidence, and tracker algorithm/config (via stage_tracking.tracking.pipeline),
+confidence, and tracker algorithm/config (via tracking.tracking.pipeline),
 then scores every resulting prediction against ground truth with TrackEval
 (HOTA / CLEAR / Identity) and compiles the results into a CSV.
 
@@ -64,9 +64,9 @@ ARGUMENTS
                 --models and --confidence. See USAGE.
 """
 
-from stage_tracking.evaluation.metrics import hota_score, IDF1_score, AssA_score
-from stage_tracking.tracking.pipeline import parse_tracker_spec, run_tracking_sweep
-from stage_tracking.config.models import EvaluationConfig
+from tracking.evaluation.metrics import hota_score, IDF1_score, AssA_score
+from tracking.tracking.pipeline import parse_tracker_spec, run_tracking_sweep
+from tracking.config.models import EvaluationConfig
 import argparse
 
 from pathlib import Path

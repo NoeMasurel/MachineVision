@@ -14,12 +14,12 @@ Creates a temporary folder in the format expected by TrackEval.
 Filter occluded object
 
 Usage:
-    python -m stage_tracking.evaluation.metrics \
+    python -m tracking.evaluation.metrics \
         --gt   data/gt/ground_truth.txt \
         --pred data/pred/predictions.txt
 
     # Unfilter occluded GT objects
-    python -m stage_tracking.evaluation.metrics \
+    python -m tracking.evaluation.metrics \
         --gt   data/gt/ground_truth.txt \
         --pred data/pred/predictions.txt \
         --occluded False
@@ -27,13 +27,13 @@ Usage:
     # Change the IoU matching threshold used by CLEAR/Identity (default 0.5)
     # Note: HOTA does not take a single threshold (Sum over all possible thresholds)
     # official way it is computed.
-    python -m stage_tracking.evaluation.metrics \
+    python -m tracking.evaluation.metrics \
         --gt   data/gt/ground_truth.txt \
         --pred data/pred/predictions.txt \
         --max-iou 0.5
 
     # Pick which metric families to compute
-    python -m stage_tracking.evaluation.metrics \
+    python -m tracking.evaluation.metrics \
         --gt data/gt/ground_truth.txt \
         --pred data/pred/predictions.txt \
         --metrics HOTA CLEAR Identity

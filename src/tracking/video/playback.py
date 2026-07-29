@@ -2,9 +2,9 @@
 playback.py — Replay a video with bounding boxes from detections CSV.
 
 Usage
-    python -m stage_tracking.video.playback -v path/to/video.mp4
-    python -m stage_tracking.video.playback -v path/to/video.mp4 -c detections.txt
-    python -m stage_tracking.video.playback -v path/to/video.mp4 -c detections.txt --speed 2.0
+    python -m tracking.video.playback -v path/to/video.mp4
+    python -m tracking.video.playback -v path/to/video.mp4 -c detections.txt
+    python -m tracking.video.playback -v path/to/video.mp4 -c detections.txt --speed 2.0
 
 Controls
     q / ESC : quit

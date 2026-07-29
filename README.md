@@ -1,4 +1,4 @@
-# stage-tracking
+# tracking
 
 An installable Python package for building, evaluating, and tuning multi-object
 tracking (MOT) pipelines with Ultralytics models and MOT evaluation metrics.
@@ -8,14 +8,14 @@ function and a console script:
 
 | Workflow                        | API                                             | Console script    |
 |----------------------------------|--------------------------------------------------|-------------------|
-| Run a tracker over a video       | `stage_tracking.tracking.run_tracking`            | `stage-track`     |
-| Evaluate predictions vs. ground truth | `stage_tracking.evaluation.evaluate_predictions` | `stage-evaluate`  |
-| Search tracker/detection params with NOMAD | `stage_tracking.optimization.optimize_parameters` | `stage-optimize`  |
+| Run a tracker over a video       | `tracking.tracking.run_tracking`            | `track`     |
+| Evaluate predictions vs. ground truth | `tracking.evaluation.evaluate_predictions` | `evaluate`  |
+| Search tracker/detection params with NOMAD | `tracking.optimization.optimize_parameters` | `optimize`  |
 
 ## Repository layout
 
 ```text
-src/stage_tracking/
+src/tracking/
 ├── config/        # DatasetConfig / TrackingConfig / EvaluationConfig / OptimizationConfig
 │                   dataclasses, and YAML loading (config/loading.py)
 ├── tracking/       # tracker_config.py (YAML config builder) + pipeline.py
@@ -48,12 +48,12 @@ runtime/                    # generated caches/configs: tracker_base_cache/, tra
 pip install -e .
 ```
 
-This installs the `stage_tracking` package (from `src/`) in editable mode
+This installs the `tracking` package (from `src/`) in editable mode
 plus its dependencies (numpy, pandas, opencv-python, PyYAML, ultralytics,
 motmetrics, trackeval, PyNomadBBO, ffmpeg-python), and registers the
-`stage-track` / `stage-evaluate` / `stage-optimize` console scripts.
+`track` / `evaluate` / `optimize` console scripts.
 
-If you use the video cutting/preprocessing utilities in `stage_tracking.video`,
+If you use the video cutting/preprocessing utilities in `tracking.video`,
 ensure FFmpeg is installed and available on your system PATH.
 
 ## Usage
@@ -68,7 +68,7 @@ The typical workflow is:
    TrackEval metrics.
 
 ```bash
-stage-evaluate --gt Data/GroundTruth/Vid1/gt.txt --video path/to/video.mp4 --models m --confidence 0.25
+evaluate --gt Data/GroundTruth/Vid1/gt.txt --video path/to/video.mp4 --models m --confidence 0.25
 ```
 
 This command will:
@@ -84,16 +84,16 @@ If predictions already exist, you can skip the tracking step and evaluate
 them directly:
 
 ```bash
-stage-evaluate --gt Data/GroundTruth/Vid1/gt.txt
+evaluate --gt Data/GroundTruth/Vid1/gt.txt
 ```
 
 ### 3. Generate tracker YAML configurations
 
-`stage_tracking.tracking.build_tracker_config` builds tracker configuration
+`tracking.tracking.build_tracker_config` builds tracker configuration
 files programmatically:
 
 ```bash
-python -m stage_tracking.tracking.tracker_config tracktrack --track_high_thresh 0.6 --track_buffer 45
+python -m tracking.tracking.tracker_config tracktrack --track_high_thresh 0.6 --track_buffer 45
 ```
 
 This is useful when you want to create custom tracker parameter sets without
@@ -101,11 +101,11 @@ hand-editing YAML files.
 
 ### 4. Optimize tracker parameters with NOMAD
 
-`stage-optimize` uses a YAML configuration and NOMAD to search over tracker
+`optimize` uses a YAML configuration and NOMAD to search over tracker
 and detection parameters:
 
 ```bash
-stage-optimize --config opti_config.yaml
+optimize --config opti_config.yaml
 ```
 
 The optimizer will:
@@ -119,9 +119,9 @@ The optimizer will:
 
 ```python
 from pathlib import Path
-from stage_tracking.config import TrackingConfig, EvaluationConfig
-from stage_tracking.tracking import run_tracking
-from stage_tracking.evaluation import evaluate_predictions
+from tracking.config import TrackingConfig, EvaluationConfig
+from tracking.tracking import run_tracking
+from tracking.evaluation import evaluate_predictions
 
 tracking_config = TrackingConfig(
     video_path=Path("videos/clip.mp4"),
@@ -142,7 +142,7 @@ rows = evaluate_predictions(EvaluationConfig(
 
 The optimizer is driven by a YAML file (see `opti_config.yaml` at the repo
 root for a working example) loaded into an `OptimizationConfig` via
-`stage_tracking.config.load_optimization_config`. It defines:
+`tracking.config.load_optimization_config`. It defines:
 
 * the input video and ground-truth path (`video_path`, `gt_path`)
 * model list for the search (`models`)

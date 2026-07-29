@@ -1,6 +1,6 @@
 import pandas as pd
 
-from stage_tracking.evaluation import metrics as eval_mod
+from tracking.evaluation import metrics as eval_mod
 
 
 def test_load_gt_filters_ignored_and_occluded_rows(tmp_path):

@@ -6,22 +6,22 @@ Output is written in the MOT (Multiple Object Tracking) challenge format:
 
 Usage examples:
   # Basic run (with GUI window)
-  python -m stage_tracking.tracking.pipeline videos/clip.mp4
+  python -m tracking.tracking.pipeline videos/clip.mp4
 
   # SSH / headless server (no display)
-  python -m stage_tracking.tracking.pipeline videos/clip.mp4 --no-display
+  python -m tracking.tracking.pipeline videos/clip.mp4 --no-display
 
   # Trim to a time window, custom confidence, save output video
-  python -m stage_tracking.tracking.pipeline videos/clip.mp4 --start 10 --end 60 \
+  python -m tracking.tracking.pipeline videos/clip.mp4 --start 10 --end 60 \
       --conf 0.4 --save-video output/annotated.mp4
 
   # Custom model and tracker, custom MOT output path
-  python -m stage_tracking.tracking.pipeline videos/clip.mp4 \
+  python -m tracking.tracking.pipeline videos/clip.mp4 \
       --model yolo26n.pt --tracker deepocsort.yaml \
       --output-mot runtime/detections/my_results.txt
 
   # Full option reference
-  python -m stage_tracking.tracking.pipeline --help
+  python -m tracking.tracking.pipeline --help
 """
 
 from __future__ import annotations
@@ -37,8 +37,8 @@ from ultralytics import YOLO
 from ultralytics.utils.plotting import colors
 import pandas as pd
 
-from stage_tracking.config.models import TrackingConfig
-from stage_tracking.tracking.tracker_config import build_tracker_config
+from tracking.config.models import TrackingConfig
+from tracking.tracking.tracker_config import build_tracker_config
 
 
 def _load_tracker_params(tracker_path: str | None) -> dict:

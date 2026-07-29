@@ -16,12 +16,12 @@ from pathlib import Path
 
 import PyNomad
 
-from stage_tracking.config.loading import load_optimization_config
-from stage_tracking.config.models import OptimizationConfig
-from stage_tracking.evaluation.compile import pred_from_gt, save_csv
-from stage_tracking.evaluation.metrics import AssA_score, IDF1_score, hota_score
-from stage_tracking.tracking.pipeline import run_tracking_sweep
-from stage_tracking.tracking.tracker_config import build_tracker_config, list_valid_params
+from tracking.config.loading import load_optimization_config
+from tracking.config.models import OptimizationConfig
+from tracking.evaluation.compile import pred_from_gt, save_csv
+from tracking.evaluation.metrics import AssA_score, IDF1_score, hota_score
+from tracking.tracking.pipeline import run_tracking_sweep
+from tracking.tracking.tracker_config import build_tracker_config, list_valid_params
 
 DEFAULT_CONFIG_PATH = Path("opti_config.yaml")
 
