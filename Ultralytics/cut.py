@@ -5,13 +5,12 @@ import pandas as pd
 
 """
 USAGE :
-
     --video : specify the input path
     --timestamps : specify the timestamps file (csv with columns: video,segment,start,end)
 
 """
 
-def get_fps(input_file):
+def get_fps(input_file: Path) -> float:
     probe = ffmpeg.probe(str(input_file))
     video_stream = next(
         s for s in probe["streams"] if s["codec_type"] == "video"
@@ -19,15 +18,15 @@ def get_fps(input_file):
     num, den = video_stream["r_frame_rate"].split("/")
     return int(num) / int(den)
 
-def frames_to_seconds(frame, fps):
+def frames_to_seconds(frame: int, fps: float) -> float:
     return frame / fps
 
-def format_seconds(seconds):
+def format_seconds(seconds: float)-> str:
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
     return f"{h:02}:{m:02}:{s:02}" if h else f"{m:02}:{s:02}"
 
-def prompt_user(segment_name, start_frame, end_frame, start_sec, end_sec):
+def prompt_user(segment_name: str, start_frame: int, end_frame: int, start_sec: float, end_sec: float) -> str:
     duration_sec = end_sec - start_sec
     print(
         f"\n  Segment : {segment_name}\n"
@@ -41,8 +40,7 @@ def prompt_user(segment_name, start_frame, end_frame, start_sec, end_sec):
             return answer
         print("  Please enter y, n, or q.")
 
-def extract_clips(input_file, segments, fps):
-    p = Path(input_file)
+def extract_clips(input_file: Path, segments: list, fps: float) -> None:
     extracted = 0
     skipped = 0
 
@@ -68,7 +66,7 @@ def extract_clips(input_file, segments, fps):
                 raise ValueError(f"Bad segment: start={start_frame}, end={end_frame}")
 
             safe_name = str(segment_name).replace(" ", "_")
-            output = str(p.with_name(f"{p.stem}_{safe_name}_{i}.mp4"))
+            output = str(input_file.with_name(f"{input_file.stem}_{safe_name}_{i}.mp4"))
 
             (
                 ffmpeg
@@ -86,7 +84,7 @@ def extract_clips(input_file, segments, fps):
 
     print(f"\nDone. {extracted} extracted, {skipped} skipped.")
 
-def validate_file(path_str, label):
+def validate_file(path_str: str, label:str)-> Path:
     path = Path(path_str)
 
     if not path.exists():
