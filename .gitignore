@@ -6,6 +6,7 @@ Outdated/
 Results/
 videos/
 trackers/
+tests/
 
 # Large files
 *.pdf
