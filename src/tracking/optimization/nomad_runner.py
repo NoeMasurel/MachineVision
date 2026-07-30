@@ -18,18 +18,12 @@ import PyNomad
 
 from tracking.config.loading import load_optimization_config
 from tracking.config.models import OptimizationConfig
-from tracking.evaluation.compile import pred_from_gt, save_csv
-from tracking.evaluation.metrics import AssA_score, IDF1_score, hota_score
+from tracking.evaluation.compile import pred_from_gt, save_csv, METRIC_LABELS
+from tracking.evaluation.metrics import METRIC_KEYS, metric_score
 from tracking.tracking.pipeline import run_tracking_sweep
 from tracking.tracking.tracker_config import build_tracker_config, list_valid_params
 
 DEFAULT_CONFIG_PATH = Path("opti_config.yaml")
-
-METRIC_CONFIG = {
-    "idf1": {"score_fn": IDF1_score, "summary_key": "Identity.IDF1", "label": "IDF1"},
-    "hota": {"score_fn": hota_score, "summary_key": "HOTA.HOTA", "label": "HOTA"},
-    "assa": {"score_fn": AssA_score, "summary_key": "HOTA.AssA", "label": "AssA"},
-}
 
 
 def parse_args(argv: list[str] | None = None):
@@ -46,7 +40,7 @@ def parse_args(argv: list[str] | None = None):
     )
     parser.add_argument("--video", dest="video_path", help="Override video path from config")
     parser.add_argument("--gt", dest="gt_path", help="Override GT path from config")
-    parser.add_argument("--metric", choices=sorted(METRIC_CONFIG), help="Override metric")
+    parser.add_argument("--metric", choices=sorted(METRIC_KEYS), help="Override metric")
     parser.add_argument("--results-dir", help="Override results directory")
     parser.add_argument("--models", nargs="+", help="Override the model list")
     parser.add_argument("--occluded", action="store_true", default=None, help="Include occluded GT rows")
@@ -84,8 +78,8 @@ def validate_config(config: OptimizationConfig) -> None:
         )
     if not any(d.get("target") == "confidence" for d in config.search_space):
         raise ValueError("search_space must include one dimension with target='confidence'.")
-    if config.metric not in METRIC_CONFIG:
-        raise ValueError(f"metric must be one of {sorted(METRIC_CONFIG)}, got {config.metric!r}.")
+    if config.metric not in METRIC_KEYS:
+        raise ValueError(f"metric must be one of {sorted(METRIC_KEYS)}, got {config.metric!r}.")
 
     valid = set(list_valid_params(config.tracker_name))
     for dim in config.search_space:
@@ -131,18 +125,19 @@ def metrics_for_point(config: OptimizationConfig, confidence: float, tracker_ove
 
     pred_file = new_files[0]
 
-    metric_cfg = METRIC_CONFIG[config.metric]
-    _score, summary = metric_cfg["score_fn"](str(config.gt_path), config.occluded, str(pred_file), return_summary=True)
+    score, summary = metric_score(str(config.gt_path), config.occluded, str(pred_file),
+                                   metric=config.metric, return_summary=True)
+    id_diff = summary["id_diff"]
 
-    if metric_cfg["summary_key"] not in summary:
-        raise KeyError(
-            f"No '{metric_cfg['summary_key']}' key in summary. Available keys: {list(summary.keys())}"
-        )
+    if config.metric == "id_diff":
+        # Negate so "smaller ID-count difference" maps to "higher score",
+        # same direction as every other metric; the blackbox below then
+        # minimizes -score, i.e. minimizes id_diff itself.
+        score = -score
 
-    id_diff = abs(summary["gt_id_count"] - summary["pred_id_count"])
     config_path = str(build_tracker_config(config.tracker_name, **tracker_overrides_full))
     csv_row = {"model": pred_file.name, **summary}
-    return summary[metric_cfg["summary_key"]], id_diff, config_path, csv_row
+    return score, id_diff, config_path, csv_row
 
 
 def snap_to_granularity(value: float, lower: float, granularity: float) -> float:
@@ -262,7 +257,7 @@ class OptimizationState:
 
 def make_blackbox(config: OptimizationConfig, state: OptimizationState):
     """Builds the NOMAD blackbox callback, closing over config + state."""
-    label_metric = METRIC_CONFIG[config.metric]["label"]
+    label_metric = METRIC_LABELS[config.metric]
 
     def bb(x):
         if state.stop_event.is_set():
@@ -334,7 +329,7 @@ def build_nomad_params(config: OptimizationConfig, x0: list[float]) -> list[str]
 
 
 def _format_eval_line(config: OptimizationConfig, eval_record: dict) -> str:
-    label_metric = METRIC_CONFIG[config.metric]["label"]
+    label_metric = METRIC_LABELS[config.metric]
     param_names = [d["name"] for d in config.search_space]
     values = "  ".join(f"{name}={eval_record[name]}" for name in param_names)
     return (
@@ -345,7 +340,7 @@ def _format_eval_line(config: OptimizationConfig, eval_record: dict) -> str:
 
 
 def print_best(config: OptimizationConfig, state: OptimizationState):
-    label_metric = METRIC_CONFIG[config.metric]["label"]
+    label_metric = METRIC_LABELS[config.metric]
 
     print(f"\n--- Top {config.n_best} by {label_metric} (highest first) ---")
     if not state.best_evals_by_metric:
@@ -381,7 +376,7 @@ def optimize_parameters(config: OptimizationConfig) -> dict:
     x0 = [snap_to_granularity(v, d["lower"], d["granularity"]) for v, d in zip(config.x0_raw, config.search_space)]
     params = build_nomad_params(config, x0)
 
-    print(f"Optimizing {METRIC_CONFIG[config.metric]['label']} over:", ", ".join(d["name"] for d in config.search_space))
+    print(f"Optimizing {METRIC_LABELS[config.metric]} over:", ", ".join(d["name"] for d in config.search_space))
     print(f"Results will be saved to: {state.results_path.resolve()}")
     print(f"CSV rows will be merged into: {state.csv_path.resolve()}")
 

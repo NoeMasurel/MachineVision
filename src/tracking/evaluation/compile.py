@@ -1,3 +1,4 @@
+# type: ignore
 """
 Compile.py
 ----------
@@ -19,16 +20,16 @@ Directory layout expected under the GT path's grandparent:
 
 USAGE
 -----
-Evaluate existing prediction files in Prediction/<vid>/ (no tracking run):
-    stage-evaluate --gt Data/GroundTruth/vid1/gt.txt
+Evaluate existing prediction files with a specific metric (hota, idf1, assa, id_diff):
+    evaluate --gt Data/GroundTruth/vid1/gt.txt --metric idf1
 
-Run tracker(s) on a video, then evaluate only the files just produced:
-    stage-evaluate --gt Data/GroundTruth/vid1/gt.txt --video vid1.mp4
+Run tracker(s) on a video, then evaluate with id_diff metric:
+    evaluate --gt Data/GroundTruth/vid1/gt.txt --video vid1.mp4 --metric id_diff
 
 Sweep model sizes, confidence thresholds, and trackers *in lockstep* (paired,
 NOT a cartesian product): the i-th run uses models[i], confidence[i] and
 trackers[i]. All three lists must be the same length:
-    stage-evaluate --gt ... --video vid1.mp4 \
+    evaluate --gt ... --video vid1.mp4 --metric hota \
         --models n s m --confidence 0.25 0.4 0.6 \
         --trackers bytetrack botsort none
 
@@ -64,13 +65,21 @@ ARGUMENTS
                 --models and --confidence. See USAGE.
 """
 
-from tracking.evaluation.metrics import hota_score, IDF1_score, AssA_score
+from tracking.evaluation.metrics import metric_score, METRIC_KEYS
 from tracking.tracking.pipeline import parse_tracker_spec, run_tracking_sweep
 from tracking.config.models import EvaluationConfig
 import argparse
 
 from pathlib import Path
 import pandas as pd
+
+# Display label for each supported metric, shown in verbose evaluation output.
+METRIC_LABELS = {
+    "hota": "HOTA",
+    "idf1": "IDF1",
+    "assa": "AssA",
+    "id_diff": "ID Diff",
+}
 
 def pred_from_gt(gt_path: Path) -> Path:
     """
@@ -93,6 +102,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Prediction folder can be  automatically resolved to FolderName/Data/Prediction"))
     parser.add_argument("--pred", default=None,
         help="Overwrite pred path")
+    parser.add_argument("--metric", default="hota", choices=list(METRIC_KEYS.keys()),
+        help="Metric to evaluate and optimize for (default: hota)")
     parser.add_argument("--video", type=str, default=None,
         help=("Video path. When provided the tracker(s) run and write\n"
             "output(s) into the resolved prediction folder before evaluation.\n"
@@ -114,43 +125,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 # Evaluation
 
-def evaluate_file_hota(gt_path: str, pred_file: Path, occluded: bool, verbose: bool = True) -> dict:
-    """Evaluate a single prediction TXT file and return a metrics row."""
-    hota, summary = hota_score(gt_path, occluded, str(pred_file), return_summary=True) # type: ignore
+def evaluate_file_metric(gt_path: str, pred_file: Path, metric: str, occluded: bool, verbose: bool = True) -> dict:
+    """Evaluate a single prediction TXT file against ground truth using the specified metric."""
+    score, summary = metric_score(gt_path, occluded, str(pred_file), metric=metric, return_summary=True)
 
     if verbose:
-        print(f"\n HOTA  = {hota * 100:.2f} % — {pred_file.name}") # type: ignore
+        label = METRIC_LABELS.get(metric, metric)
+        if metric == "id_diff":
+            print(f"\n {label} = {score} — {pred_file.name}")
+        else:
+            print(f"\n {label} = {score * 100:.2f} % — {pred_file.name}")
         print(f"   IDs GT : {summary['gt_id_count']}  |  IDs Prediction : {summary['pred_id_count']}")
 
     row = {"model": pred_file.name}
     row.update(summary)
     return row
 
-def evaluate_file_IDF1(gt_path: str, pred_file: Path, occluded: bool, verbose: bool = True) -> dict:
-    """Evaluate a single prediction TXT file and return a metrics row."""
-    Idf1, summary = IDF1_score(gt_path, occluded, str(pred_file), return_summary=True) # type: ignore
-
-    if verbose:
-        print(f"\n Idf1  = {Idf1 * 100:.2f} % — {pred_file.name}") # type: ignore
-        print(f"   IDs GT : {summary['gt_id_count']}  |  IDs Prediction : {summary['pred_id_count']}")
-
-    row = {"model": pred_file.name}
-    row.update(summary)
-    return row
-
-def evaluate_file_AssA(gt_path: str, pred_file: Path, occluded: bool, verbose: bool = True) -> dict:
-    """Evaluate a single prediction TXT file and return a metrics row."""
-    AssA, summary = AssA_score(gt_path, occluded, str(pred_file), return_summary=True) # type: ignore
-
-    if verbose:
-        print(f"\n AssA  = {AssA * 100:.2f} % — {pred_file.name}") # type: ignore
-        print(f"   IDs GT : {summary['gt_id_count']}  |  IDs Prediction : {summary['pred_id_count']}")
-
-    row = {"model": pred_file.name}
-    row.update(summary)
-    return row
-
-def evaluate_folder(gt_path: str, pred_folder: Path, occluded: bool, verbose: bool = True) -> list[dict]:
+def evaluate_folder(gt_path: str, pred_folder: Path, metric: str, occluded: bool, verbose: bool = True) -> list[dict]:
     """Evaluate every TXT file found in pred_folder."""
     txt_files = sorted(pred_folder.glob("*.txt"))
     if not txt_files:
@@ -158,28 +149,28 @@ def evaluate_folder(gt_path: str, pred_folder: Path, occluded: bool, verbose: bo
             print(f"\n No .txt file found in: {pred_folder}")
         return []
 
-    return evaluate_files(gt_path, txt_files, occluded, verbose=verbose)
+    return evaluate_files(gt_path, txt_files, metric, occluded, verbose=verbose)
 
-def evaluate_files(gt_path: str, pred_files: list[Path], occluded: bool, verbose: bool = True) -> list[dict]:
+def evaluate_files(gt_path: str, pred_files: list[Path], metric: str, occluded: bool, verbose: bool = True) -> list[dict]:
     """Evaluate exactly the given list of prediction TXT files."""
     if not pred_files:
         if verbose:
             print("\n No prediction file to evaluate.")
         return []
 
-    return [evaluate_file_hota(gt_path, pred_file, occluded, verbose=verbose) for pred_file in pred_files]
+    return [evaluate_file_metric(gt_path, pred_file, metric, occluded, verbose=verbose) for pred_file in pred_files]
 
 
-def evaluate_predictions(config: EvaluationConfig) -> list[dict]:
+def evaluate_predictions(config: EvaluationConfig, metric: str = "hota") -> list[dict]:
     """
     Evaluate prediction file(s) against ground truth and return the metric
     rows (does not write a CSV -- pair with save_csv() for that side effect).
     """
     if config.pred_files is not None:
-        return evaluate_files(str(config.gt_path), config.pred_files, config.occluded, verbose=config.verbose)
+        return evaluate_files(str(config.gt_path), config.pred_files, metric, config.occluded, verbose=config.verbose)
 
     pred_path = config.pred_path or pred_from_gt(config.gt_path)
-    return evaluate_folder(str(config.gt_path), pred_path, config.occluded, verbose=config.verbose)
+    return evaluate_folder(str(config.gt_path), pred_path, metric, config.occluded, verbose=config.verbose)
 
 # CSV export
 
@@ -229,9 +220,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.video is not None:
         new_files = run_tracking_sweep(args.video, str(gt_path), str(pred_path),
                                 args.confidence, args.models, args.trackers)
-        all_rows = evaluate_files(str(gt_path), new_files, args.occluded)
+        all_rows = evaluate_files(str(gt_path), new_files, args.metric, args.occluded)
     else:
-        all_rows = evaluate_folder(str(gt_path), pred_path, args.occluded)
+        all_rows = evaluate_folder(str(gt_path), pred_path, args.metric, args.occluded)
 
     save_csv(all_rows, csv_path)
 

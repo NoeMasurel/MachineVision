@@ -249,39 +249,22 @@ def get_id_counts(gt: pd.DataFrame, pred: pd.DataFrame) -> tuple[int, int]:
 
 # Entry Point
 
-def hota_score(gt_file, occluded, pred_file, max_iou=0.5, return_summary=False,
-              metrics=("HOTA", "CLEAR", "Identity")):
+# Maps a metric name to the key it's read from under in the summary dict
+# built by compute_summary(). "id_diff" isn't a TrackEval metric family --
+# it's the absolute difference between GT and predicted ID counts, added to
+# the summary alongside the TrackEval numbers below.
+METRIC_KEYS = {
+    "hota": "HOTA.HOTA",
+    "idf1": "Identity.IDF1",
+    "assa": "HOTA.AssA",
+    "id_diff": "id_diff",
+}
+
+def compute_summary(gt_file, occluded, pred_file, max_iou=0.5,
+                     metrics=("HOTA", "CLEAR", "Identity")) -> dict:
     """
-    Convenience wrapper for calling this from other code, analogous to the
-    original motmetrics-based mot_score(). Returns Hota by default;
-    pass return_summary=True for the full dict of every computed metric,
-    including HOTA/DetA/AssA/IDF1/etc.
-    """
-    gt = load_gt(gt_file, occluded)
-    pred = load_predictions(pred_file)
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        num_frames = write_trackeval_files(gt, pred, tmp_dir)
-        results = run_trackeval(tmp_dir, "seq01", "my_tracker", num_frames,
-                                 list(metrics), iou_threshold=max_iou)
-
-    summary = extract_summary(results, "my_tracker")
-    gt_id_count, pred_id_count = get_id_counts(gt, pred)
-    summary["gt_id_count"] = gt_id_count
-    summary["pred_id_count"] = pred_id_count
-    hota = summary.get("HOTA.HOTA")
-
-    if return_summary:
-        return hota, summary
-    return hota
-
-def IDF1_score(gt_file, occluded, pred_file, max_iou=0.5, return_summary=False,
-              metrics=("HOTA", "CLEAR", "Identity")):
-    """
-    Convenience wrapper for calling this from other code, analogous to the
-    original motmetrics-based mot_score(). Returns Hota by default;
-    pass return_summary=True for the full dict of every computed metric,
-    including HOTA/DetA/AssA/IDF1/etc.
+    Run TrackEval once and return the full summary dict: every requested
+    metric family's values, plus gt_id_count / pred_id_count / id_diff.
     """
     gt = load_gt(gt_file, occluded)
     pred = load_predictions(pred_file)
@@ -293,33 +276,25 @@ def IDF1_score(gt_file, occluded, pred_file, max_iou=0.5, return_summary=False,
 
     summary = extract_summary(results, "my_tracker")
     gt_id_count, pred_id_count = get_id_counts(gt, pred)
-    summary["gt_id_count"] = gt_id_count
-    summary["pred_id_count"] = pred_id_count
-    IDF1_score = summary.get("Identity.IDF1")
+    summary["id_diff"] = abs(gt_id_count - pred_id_count)
+    return summary
+
+def metric_score(gt_file, occluded, pred_file, metric="hota", max_iou=0.5,
+                  return_summary=False, metrics=("HOTA", "CLEAR", "Identity")):
+    """
+    Compute a single named metric ("hota", "idf1", "assa", or "id_diff") for
+    a GT/prediction pair. Pass return_summary=True for the full dict of
+    every computed metric, including HOTA/DetA/AssA/IDF1/id_diff/etc.
+    """
+    if metric not in METRIC_KEYS:
+        raise ValueError(f"Unknown metric '{metric}'. Available: {', '.join(METRIC_KEYS)}")
+
+    summary = compute_summary(gt_file, occluded, pred_file, max_iou, metrics)
+    score = summary.get(METRIC_KEYS[metric])
 
     if return_summary:
-        return IDF1_score, summary
-    return IDF1_score
-
-def AssA_score(gt_file, occluded, pred_file, max_iou=0.5, return_summary=False,
-              metrics=("HOTA", "CLEAR", "Identity")):
-    gt = load_gt(gt_file, occluded)
-    pred = load_predictions(pred_file)
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        num_frames = write_trackeval_files(gt, pred, tmp_dir)
-        results = run_trackeval(tmp_dir, "seq01", "my_tracker", num_frames,
-                                 list(metrics), iou_threshold=max_iou)
-
-    summary = extract_summary(results, "my_tracker")
-    gt_id_count, pred_id_count = get_id_counts(gt, pred)
-    summary["gt_id_count"] = gt_id_count
-    summary["pred_id_count"] = pred_id_count
-    AssA = summary.get("HOTA.AssA")
-
-    if return_summary:
-        return AssA, summary
-    return AssA
+        return score, summary
+    return score
 
 
 # CLI
