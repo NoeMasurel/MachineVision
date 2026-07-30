@@ -25,6 +25,10 @@ from tracking.tracking.tracker_config import build_tracker_config, list_valid_pa
 
 DEFAULT_CONFIG_PATH = Path("opti_config.yaml")
 
+# Whether a larger value of each metric is better. id_diff (|GT ids - pred ids|)
+# is the only lower-is-better metric here.
+METRIC_HIGHER_IS_BETTER = {"hota": True, "idf1": True, "assa": True, "id_diff": False}
+
 
 def parse_args(argv: list[str] | None = None):
     import argparse
@@ -129,12 +133,6 @@ def metrics_for_point(config: OptimizationConfig, confidence: float, tracker_ove
                                    metric=config.metric, return_summary=True)
     id_diff = summary["id_diff"]
 
-    if config.metric == "id_diff":
-        # Negate so "smaller ID-count difference" maps to "higher score",
-        # same direction as every other metric; the blackbox below then
-        # minimizes -score, i.e. minimizes id_diff itself.
-        score = -score
-
     config_path = str(build_tracker_config(config.tracker_name, **tracker_overrides_full))
     csv_row = {"model": pred_file.name, **summary}
     return score, id_diff, config_path, csv_row
@@ -191,10 +189,11 @@ class OptimizationState:
         with self.lock:
             self.all_evals.append(eval_record)
 
-            _update_top_n(self.best_evals_by_metric, eval_record, self.config.metric, reverse=True, n=self.config.n_best)
+            higher_is_better = METRIC_HIGHER_IS_BETTER[self.config.metric]
+            _update_top_n(self.best_evals_by_metric, eval_record, "metric_value", reverse=higher_is_better, n=self.config.n_best)
             _update_top_n(self.best_evals_by_id_diff, eval_record, "id_diff", reverse=False, n=self.config.n_best)
 
-            self.recent_scores.append(eval_record[self.config.metric])
+            self.recent_scores.append(eval_record["metric_value"])
             stagnated = self._is_stagnated()
 
             self._save_partial()
@@ -208,6 +207,18 @@ class OptimizationState:
         rel_spread = (window_max - window_min) / abs(window_max) if window_max else 0.0
         return rel_spread <= self.config.stagnation_rel_threshold
 
+    def _best_lists_payload(self) -> dict:
+        """
+        Best-evals fields for the JSON payload. When the optimized metric IS
+        id_diff, best_evals_by_metric and best_evals_by_id_diff are the same
+        ranking (both ascending by ID-count error), so only one field is
+        emitted instead of two identical/colliding ones.
+        """
+        payload = {"best_evals_by_id_diff": self.best_evals_by_id_diff}
+        if self.config.metric != "id_diff":
+            payload[f"best_evals_by_{self.config.metric}"] = self.best_evals_by_metric
+        return payload
+
     def _save_partial(self):
         """Flush progress so far to disk. Must be called while holding self.lock."""
         self.partial_results_path.parent.mkdir(parents=True, exist_ok=True)
@@ -218,8 +229,7 @@ class OptimizationState:
             "status": "in_progress" if not self.stop_event.is_set() else f"stopping ({self.stop_reason})",
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "all_evals": self.all_evals,
-            f"best_evals_by_{self.config.metric}": self.best_evals_by_metric,
-            "best_evals_by_id_diff": self.best_evals_by_id_diff,
+            **self._best_lists_payload(),
         }
         tmp_path = self.partial_results_path.with_suffix(".tmp")
         with open(tmp_path, "w", encoding="utf-8") as f:
@@ -243,8 +253,7 @@ class OptimizationState:
             "num_evals": len(self.all_evals),
             "num_successful": sum(1 for e in self.all_evals if e.get("success")),
             "raw_nomad_result": raw_result,
-            f"best_evals_by_{self.config.metric}": self.best_evals_by_metric,
-            "best_evals_by_id_diff": self.best_evals_by_id_diff,
+            **self._best_lists_payload(),
         }
         with open(self.results_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
@@ -258,6 +267,7 @@ class OptimizationState:
 def make_blackbox(config: OptimizationConfig, state: OptimizationState):
     """Builds the NOMAD blackbox callback, closing over config + state."""
     label_metric = METRIC_LABELS[config.metric]
+    higher_is_better = METRIC_HIGHER_IS_BETTER[config.metric]
 
     def bb(x):
         if state.stop_event.is_set():
@@ -285,14 +295,14 @@ def make_blackbox(config: OptimizationConfig, state: OptimizationState):
         print(f"[OK] {label}  {label_metric}={score:.4f}  ID_diff={id_diff}  config={config_path}")
         eval_record.update({
             "success": True,
-            config.metric: score,
+            "metric_value": score,
             "id_diff": id_diff,
             "tracker_config_yaml": config_path,
         })
 
         stagnated = state.record_success(eval_record, csv_row)
         if stagnated:
-            best_so_far = state.best_evals_by_metric[0][config.metric] if state.best_evals_by_metric else float("nan")
+            best_so_far = state.best_evals_by_metric[0]["metric_value"] if state.best_evals_by_metric else float("nan")
             state.request_stop(
                 f"Last {config.stagnation_window} consecutive successful evals all landed within "
                 f"{config.stagnation_rel_threshold * 100:.3f}% (relative) of each other "
@@ -300,7 +310,11 @@ def make_blackbox(config: OptimizationConfig, state: OptimizationState):
                 f"search has converged (best {label_metric}={best_so_far:.4f})."
             )
 
-        x.setBBO(f"{-score}".encode("UTF-8"))  # single output: minimize -score
+        # NOMAD always minimizes; flip the sign for higher-is-better metrics
+        # so minimizing -score is equivalent to maximizing score, and pass
+        # id_diff through unchanged since it's already lower-is-better.
+        bb_value = -score if higher_is_better else score
+        x.setBBO(f"{bb_value}".encode("UTF-8"))
         return 1
 
     return bb
@@ -333,21 +347,23 @@ def _format_eval_line(config: OptimizationConfig, eval_record: dict) -> str:
     param_names = [d["name"] for d in config.search_space]
     values = "  ".join(f"{name}={eval_record[name]}" for name in param_names)
     return (
-        f"{values}  {label_metric}={eval_record[config.metric]:.4f}  "
+        f"{values}  {label_metric}={eval_record['metric_value']:.4f}  "
         f"ID_diff={eval_record['id_diff']}  "
         f"config={eval_record.get('tracker_config_yaml')}"
     )
 
 
 def print_best(config: OptimizationConfig, state: OptimizationState):
-    label_metric = METRIC_LABELS[config.metric]
+    if config.metric != "id_diff":
+        label_metric = METRIC_LABELS[config.metric]
+        order = "highest first" if METRIC_HIGHER_IS_BETTER[config.metric] else "lowest first"
 
-    print(f"\n--- Top {config.n_best} by {label_metric} (highest first) ---")
-    if not state.best_evals_by_metric:
-        print("No successful evaluation found -- every trial failed.")
-    else:
-        for i, ev in enumerate(state.best_evals_by_metric, start=1):
-            print(f"{i}. {_format_eval_line(config, ev)}")
+        print(f"\n--- Top {config.n_best} by {label_metric} ({order}) ---")
+        if not state.best_evals_by_metric:
+            print("No successful evaluation found -- every trial failed.")
+        else:
+            for i, ev in enumerate(state.best_evals_by_metric, start=1):
+                print(f"{i}. {_format_eval_line(config, ev)}")
 
     print(f"\n--- Top {config.n_best} by ID-count error (lowest first) ---")
     if not state.best_evals_by_id_diff:
