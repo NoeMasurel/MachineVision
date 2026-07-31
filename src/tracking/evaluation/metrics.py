@@ -18,11 +18,11 @@ Usage:
         --gt   data/gt/ground_truth.txt \
         --pred data/pred/predictions.txt
 
-    # Unfilter occluded GT objects
+    # Include occluded GT objects (default is to exclude them)
     python -m tracking.evaluation.metrics \
         --gt   data/gt/ground_truth.txt \
         --pred data/pred/predictions.txt \
-        --occluded False
+        --occluded
 
     # Change the IoU matching threshold used by CLEAR/Identity (default 0.5)
     # Note: HOTA does not take a single threshold (Sum over all possible thresholds)
@@ -309,8 +309,8 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument("--pred", required=True,
                         help="Path to predictions file "
                              "(standard MOT format: frame,id,x,y,w,h,conf,x,y,z)")
-    parser.add_argument("--occluded", type=bool, default=False,
-                        help="Remove or not the occluded detections in the ground truth")
+    parser.add_argument("--occluded", action="store_true",
+                        help="Include occluded detections from the ground truth (default: excluded)")
     parser.add_argument("--max-iou", type=float, default=0.5,
                         help="IoU threshold used by CLEAR/Identity matching (default: 0.5). "
                              "HOTA ignores this and sweeps its own 19 thresholds internally.")

@@ -108,7 +108,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=("Video path. When provided the tracker(s) run and write\n"
             "output(s) into the resolved prediction folder before evaluation.\n"
             "Omit to evaluate existing TXT files in the prediction folder directly."),)
-    parser.add_argument("--occluded", type=bool, default=False,
+    parser.add_argument("--occluded", action="store_true",
         help="Include the occluded detections from the ground truth")
     parser.add_argument("--confidence", nargs="+", type=float, default=[None],
         help="One or more detection confidence thresholds, paired index-for-index "
