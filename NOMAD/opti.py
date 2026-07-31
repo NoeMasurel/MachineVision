@@ -19,16 +19,37 @@ import PyNomad
 import yaml
 import TrackEval.Compile as compile_mod
 
-from TrackEval.Eval import AssA_score, IDF1_score, hota_score
+from TrackEval.Eval import AssA_score, IDF1_score, hota_score, id_diff_score
 from Ultralytics.tracker import build_tracker_config, list_valid_params
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("opti_config.yaml")
 
 METRIC_CONFIG = {
-    "idf1": {"score_fn": IDF1_score, "summary_key": "Identity.IDF1", "label": "IDF1"},
-    "hota": {"score_fn": hota_score, "summary_key": "HOTA.HOTA", "label": "HOTA"},
-    "assa": {"score_fn": AssA_score, "summary_key": "HOTA.AssA", "label": "AssA"},
+    "idf1": {
+        "score_fn": IDF1_score,
+        "summary_key": "Identity.IDF1",
+        "label": "IDF1",
+        "maximize": True,
+    },
+    "hota": {
+        "score_fn": hota_score,
+        "summary_key": "HOTA.HOTA",
+        "label": "HOTA",
+        "maximize": True,
+    },
+    "assa": {
+        "score_fn": AssA_score,
+        "summary_key": "HOTA.AssA",
+        "label": "AssA",
+        "maximize": True,
+    },
+    "id_diff": {
+        "score_fn": id_diff_score,
+        "summary_key": "id_diff",
+        "label": "ID Diff",
+        "maximize": False,
+    },
 }
 
 # Runtime globals -- all populated from the YAML config (optionally overridden
@@ -234,7 +255,7 @@ def metrics_for_point(confidence: float, tracker_overrides: dict):
 
     pred_file = new_files[0]
 
-    metric_cfg = METRIC_CONFIG[METRIC]
+    metric_cfg = METRIC_CONFIG[METRIC]  
     _score, summary = metric_cfg["score_fn"](str(gt_path), OCCLUDED, str(pred_file), return_summary=True)
 
     if metric_cfg["summary_key"] not in summary:
@@ -292,7 +313,9 @@ class OptimizationState:
         with self.lock:
             self.all_evals.append(eval_record)
 
-            _update_top_n(self.best_evals_by_metric, eval_record, METRIC, reverse=True, n=N_BEST)
+            maximize = METRIC_CONFIG[METRIC]["maximize"]
+
+            _update_top_n(self.best_evals_by_metric, eval_record, METRIC, reverse=maximize, n=N_BEST,)
             _update_top_n(self.best_evals_by_id_diff, eval_record, "id_diff", reverse=False, n=N_BEST)
 
             self.recent_scores.append(eval_record[METRIC])
@@ -399,8 +422,10 @@ def make_blackbox(state: OptimizationState):
                 f"({label_metric} range [{min(state.recent_scores):.4f}, {max(state.recent_scores):.4f}]) -- "
                 f"search has converged (best {label_metric}={best_so_far:.4f})."
             )
+        maximize = METRIC_CONFIG[METRIC]["maximize"]
+        objective = -score if maximize else score
+        x.setBBO(f"{objective}".encode("UTF-8"))
 
-        x.setBBO(f"{-score}".encode("UTF-8"))  # single output: minimize -score
         return 1
 
     return bb
@@ -440,15 +465,17 @@ def _format_eval_line(eval_record: dict) -> str:
 
 def print_best(state: OptimizationState):
     label_metric = METRIC_CONFIG[METRIC]["label"]
+    direction = "highest" if METRIC_CONFIG[METRIC]["maximize"] else "lowest"
 
-    print(f"\n--- Top {N_BEST} by {label_metric} (highest first) ---")
+    print(f"\n--- Top {N_BEST} by {label_metric} ({direction} first) ---")
     if not state.best_evals_by_metric:
         print("No successful evaluation found -- every trial failed.")
     else:
         for i, ev in enumerate(state.best_evals_by_metric, start=1):
             print(f"{i}. {_format_eval_line(ev)}")
 
-    print(f"\n--- Top {N_BEST} by ID-count error (lowest first) ---")
+    print(f"\n--- Top {N_BEST} by ID Diff (lowest first) ---")
+
     if not state.best_evals_by_id_diff:
         print("No successful evaluation found -- every trial failed.")
     else:

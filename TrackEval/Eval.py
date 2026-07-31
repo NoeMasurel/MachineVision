@@ -301,6 +301,27 @@ def IDF1_score(gt_file, occluded, pred_file, max_iou=0.5, return_summary=False,
         return IDF1_score, summary
     return IDF1_score
 
+def id_diff_score(gt_file, occluded, pred_file, return_summary=False):
+    """
+    Absolute difference between the number of unique IDs in the ground truth
+    and in the predictions. Unlike the other *_score functions this doesn't
+    need to run TrackEval at all -- it's a plain ID count comparison.
+    """
+    gt = load_gt(gt_file, occluded)
+    pred = load_predictions(pred_file)
+
+    gt_id_count, pred_id_count = get_id_counts(gt, pred)
+    id_diff = abs(gt_id_count - pred_id_count)
+
+    if return_summary:
+        summary = {
+            "gt_id_count": gt_id_count,
+            "pred_id_count": pred_id_count,
+            "id_diff": id_diff,
+        }
+        return id_diff, summary
+    return id_diff
+
 def AssA_score(gt_file, occluded, pred_file, max_iou=0.5, return_summary=False,
               metrics=("HOTA", "CLEAR", "Identity")):
     gt = load_gt(gt_file, occluded)
