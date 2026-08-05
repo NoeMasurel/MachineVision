@@ -244,6 +244,12 @@ class OptimizationState:
         tmp_path.replace(self.partial_results_path)
 
     def save_final(self, raw_result, elapsed_seconds: float, status: str) -> dict:
+        """
+        Write the run's final report. If `keep_partial` is set, everything is
+        folded into the partial file (including the full `all_evals` history)
+        so a single file holds the whole run instead of splitting summary and
+        history across two files.
+        """
         self.config.results_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "tracker": self.config.tracker_name,
@@ -262,9 +268,16 @@ class OptimizationState:
             "raw_nomad_result": raw_result,
             **self._best_lists_payload(),
         }
-        with open(self.results_path, "w", encoding="utf-8") as f:
+
+        if self.config.keep_partial:
+            payload["all_evals"] = self.all_evals
+            out_path = self.partial_results_path
+        else:
+            out_path = self.results_path
+
+        with open(out_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
-        print(f"\nResults saved to: {self.results_path.resolve()}")
+        print(f"\nResults saved to: {out_path.resolve()}")
 
         if not self.config.keep_partial and self.partial_results_path.exists():
             self.partial_results_path.unlink()
@@ -399,8 +412,9 @@ def optimize_parameters(config: OptimizationConfig) -> dict:
     x0 = [snap_to_granularity(v, d["lower"], d["granularity"]) for v, d in zip(config.x0_raw, config.search_space)]
     params = build_nomad_params(config, x0)
 
+    final_path = state.partial_results_path if config.keep_partial else state.results_path
     print(f"Optimizing {METRIC_LABELS[config.metric]} over:", ", ".join(d["name"] for d in config.search_space))
-    print(f"Results will be saved to: {state.results_path.resolve()}")
+    print(f"Results will be saved to: {final_path.resolve()}")
     print(f"CSV rows will be merged into: {state.csv_path.resolve()}")
 
     start = time.monotonic()
