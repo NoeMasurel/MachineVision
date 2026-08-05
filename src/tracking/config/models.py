@@ -61,3 +61,4 @@ class OptimizationConfig:
     x0_raw: list[float]
     tracker_override_defaults: dict = field(default_factory=dict)
     occluded: bool = False
+    keep_partial: bool = True

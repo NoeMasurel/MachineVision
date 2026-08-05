@@ -48,6 +48,13 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument("--results-dir", help="Override results directory")
     parser.add_argument("--models", nargs="+", help="Override the model list")
     parser.add_argument("--occluded", action="store_true", default=None, help="Include occluded GT rows")
+    parser.add_argument(
+        "--delete-partial",
+        dest="delete_partial",
+        action="store_true",
+        default=None,
+        help="Delete the .partial.json file once the run completes (default: keep it)",
+    )
     parser.add_argument("--max-bb-eval", type=int, help="Override max_bb_eval")
     parser.add_argument("--stagnation-window", type=int, help="Override stagnation_window")
     parser.add_argument("--stagnation-rel-threshold", type=float, help="Override stagnation_rel_threshold")
@@ -259,7 +266,7 @@ class OptimizationState:
             json.dump(payload, f, indent=2)
         print(f"\nResults saved to: {self.results_path.resolve()}")
 
-        if self.partial_results_path.exists():
+        if not self.config.keep_partial and self.partial_results_path.exists():
             self.partial_results_path.unlink()
         return payload
 
@@ -427,6 +434,7 @@ def main(argv: list[str] | None = None) -> None:
         results_dir=args.results_dir,
         models=args.models,
         occluded=args.occluded,
+        keep_partial=(False if args.delete_partial else None),
         max_bb_eval=args.max_bb_eval,
         stagnation_window=args.stagnation_window,
         stagnation_rel_threshold=args.stagnation_rel_threshold,

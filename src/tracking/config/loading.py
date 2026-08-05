@@ -94,4 +94,5 @@ def load_optimization_config(
         search_space=get("search_space"),
         x0_raw=get("x0_raw"),
         tracker_override_defaults=get("tracker_override_defaults", required=False, default={}),
+        keep_partial=bool(get("keep_partial", required=False, default=True)),
     )
