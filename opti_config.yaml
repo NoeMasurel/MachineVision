@@ -1,11 +1,11 @@
-video_path: GX011504.mp4
-gt_path: Data/GroundTruth/Vid1/gt.txt
+video_path: /home/noe/Research/Data/GX011504.MP4
+gt_path: Data/GroundTruth/Full/gt.txt
 models:
   - m
 occluded: false
 tracker_name: tracktrack
-metric: idf1
-max_bb_eval: 1
+metric: id_diff
+max_bb_eval: 1000
 stagnation_rel_threshold: 0.0001
 stagnation_window: 5
 n_best: 5
@@ -21,23 +21,18 @@ search_space:
     granularity: 0.05
   - name: track_high_thresh
     target: tracker
-    lower: 0.1
-    upper: 0.9
+    lower: 0.0
+    upper: 1.0
     granularity: 0.05
   - name: track_low_thresh
     target: tracker
-    lower: 0.05
-    upper: 0.5
+    lower: 0.0
+    upper: 1.0
     granularity: 0.05
   - name: new_track_thresh
     target: tracker
-    lower: 0.1
-    upper: 0.9
-    granularity: 0.05
-  - name: match_thresh
-    target: tracker
-    lower: 0.5
-    upper: 0.95
+    lower: 0.0
+    upper: 1.0
     granularity: 0.05
   - name: track_buffer
     target: tracker
@@ -45,34 +40,76 @@ search_space:
     upper: 100
     granularity: 1
     is_int: true
+  - name: match_thresh
+    target: tracker
+    lower: 0.0
+    upper: 1.0
+    granularity: 0.05
   - name: lost_match_thr
     target: tracker
     lower: 0.0
-    upper: 0.5
+    upper: 1.0
     granularity: 0.05
   - name: iou_weight
     target: tracker
-    lower: 0.2
-    upper: 0.8
+    lower: 0.0
+    upper: 1.0
     granularity: 0.05
   - name: reid_weight
     target: tracker
-    lower: 0.2
-    upper: 0.8
+    lower: 0.0
+    upper: 1.0
     granularity: 0.05
   - name: conf_weight
     target: tracker
-    lower: 0.05
-    upper: 0.8
+    lower: 0.0
+    upper: 1.0
     granularity: 0.05
+  - name: angle_weight
+    target: tracker
+    lower: 0.0
+    upper: 1.0
+    granularity: 0.05
+  - name: penalty_p
+    target: tracker
+    lower: 0.0
+    upper: 1.0
+    granularity: 0.05
+  - name: penalty_q
+    target: tracker
+    lower: 0.0
+    upper: 1.0
+    granularity: 0.05
+  - name: reduce_step
+    target: tracker
+    lower: 0.0
+    upper: 1.0
+    granularity: 0.05
+  - name: tai_thr
+    target: tracker
+    lower: 0.0
+    upper: 1.0
+    granularity: 0.05
+  - name: min_track_len
+    target: tracker
+    lower: 0
+    upper: 10
+    granularity: 1
+    is_int: true
 x0_raw:
   - 0.5
   - 0.6
   - 0.25
-  - 0.5
   - 0.7
-  - 55.0
-  - 0.25
+  - 30
+  - 0.7
+  - 0.0
   - 0.5
   - 0.5
-  - 0.25
+  - 0.1
+  - 0.05
+  - 0.2
+  - 0.4
+  - 0.05
+  - 0.55
+  - 3 
